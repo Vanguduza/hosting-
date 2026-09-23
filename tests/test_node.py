@@ -128,6 +128,28 @@ class NodeTests(unittest.TestCase):
             self.assertEqual(node.unroute(second["application_id"], second["release_id"])["state"], "UNROUTED")
             self.assertFalse(route_file.exists())
 
+    def test_failed_release_compensation_retains_previous_container(self):
+        fixture = DockerFixture()
+        fixture.containers["dial-ingress"] = {}
+        with tempfile.TemporaryDirectory() as directory:
+            node = Node(Path(directory) / "agent.sqlite3", runner=fixture,
+                        health_probe=lambda ip, port, path: True)
+            first = request()
+            node.deploy(first)
+            route = {"application_id": first["application_id"], "release_id": first["release_id"],
+                     "hostname": "app.example.org", "port": 8080, "health_path": "/health"}
+            node.route(route)
+            second = request(application_id=first["application_id"])
+            node.deploy(second)
+            node.route({**route, "release_id": second["release_id"]})
+            with self.assertRaises(OperationError):
+                node.abort(first["application_id"], second["release_id"], first["release_id"])
+            node.route(route)
+            self.assertEqual(node.abort(first["application_id"], second["release_id"], first["release_id"])["state"], "ABORTED")
+            self.assertEqual(node.observed(first["application_id"])["release_id"], first["release_id"])
+            self.assertNotIn(Node.container(second["release_id"]), fixture.containers)
+            self.assertEqual(node.abort(first["application_id"], second["release_id"], first["release_id"])["state"], "ABORTED")
+
 
 if __name__ == "__main__":
     unittest.main()

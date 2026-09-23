@@ -272,6 +272,46 @@ class Node:
             db.execute("DELETE FROM routes WHERE application_id=?", (app,))
         return {"application_id": app, "release_id": release, "state": "UNROUTED"}
 
+    def abort(self, application_id, release_id, previous_release_id=None):
+        """Compensate an unsuccessful release after public routing was restored."""
+        app, release = str(uuid.UUID(application_id)), str(uuid.UUID(release_id))
+        previous = str(uuid.UUID(previous_release_id)) if previous_release_id else None
+        if previous == release:
+            raise ValueError("Previous release must differ")
+        container = self.container(release)
+        with self.lock, self.file_lock():
+            with self.db() as db:
+                routed = db.execute("SELECT release_id FROM routes WHERE application_id=?", (app,)).fetchone()
+                active = db.execute("SELECT release_id FROM active WHERE application_id=?", (app,)).fetchone()
+            if routed and routed["release_id"] == release:
+                raise OperationError("Failed release still publicly routed")
+            if active and active["release_id"] == release and previous:
+                old = self.container(previous)
+                try:
+                    item = json.loads(self.runner(["docker", "inspect", old], 15))[0]
+                except (OperationError, ValueError, IndexError, KeyError) as exc:
+                    raise OperationError("Previous release unavailable") from exc
+                labels = item.get("Config", {}).get("Labels", {})
+                if labels.get("dial.application") != app or labels.get("dial.release") != previous:
+                    raise OperationError("Previous release ownership mismatch")
+            try:
+                item = json.loads(self.runner(["docker", "inspect", container], 15))[0]
+            except OperationError:
+                item = None
+            if item:
+                labels = item.get("Config", {}).get("Labels", {})
+                if labels.get("dial.application") != app or labels.get("dial.release") != release:
+                    raise OperationError("Failed release ownership mismatch")
+                self.runner(["docker", "rm", "-f", container], 30)
+            with self.db() as db:
+                if active and active["release_id"] == release:
+                    if previous:
+                        db.execute("UPDATE active SET release_id=?,container=? WHERE application_id=?",
+                                   (previous, self.container(previous), app))
+                    else:
+                        db.execute("DELETE FROM active WHERE application_id=?", (app,))
+            return {"application_id": app, "release_id": release, "state": "ABORTED"}
+
     def observed(self, application_id):
         app_id = str(uuid.UUID(application_id))
         with self.db() as db:

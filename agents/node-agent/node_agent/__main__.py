@@ -4,6 +4,7 @@ import ipaddress
 import os
 import ssl
 import uuid
+import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
@@ -74,7 +75,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self.authorized():
             return self.reply(403, {"error": "forbidden"})
         path = urlsplit(self.path).path
-        route = __import__("re").fullmatch(r"/v1/routes/([0-9a-f-]{36})/([0-9a-f-]{36})", path)
+        route = re.fullmatch(r"/v1/routes/([0-9a-f-]{36})/([0-9a-f-]{36})", path)
         if route:
             try:
                 return self.reply(200, self.server.node.unroute(*route.groups()))
@@ -82,6 +83,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(400, {"error": "invalid_id"})
             except OperationError:
                 return self.reply(409, {"error": "route_conflict"})
+        abort = re.fullmatch(r"/v1/deployments/([0-9a-f-]{36})/([0-9a-f-]{36})(?:/([0-9a-f-]{36}))?", path)
+        if abort:
+            try:
+                return self.reply(200, self.server.node.abort(*abort.groups()))
+            except ValueError:
+                return self.reply(400, {"error": "invalid_id"})
+            except OperationError:
+                return self.reply(409, {"error": "abort_blocked"})
         prefix = "/v1/applications/"
         if not path.startswith(prefix) or "/releases/" not in path:
             return self.reply(404, {"error": "not_found"})

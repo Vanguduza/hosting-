@@ -40,7 +40,8 @@ The worker pulls the admitted immutable image, waits for private health,
 swaps the route, waits up to 120 seconds for a valid public HTTPS certificate
 and matching release header, then commits the active release. On public
 failure it restores the previous route, or removes the route for a first
-release, and retries the job. The old container is retired only after
+release, and retries the job. A terminal failure keeps its capacity reserved
+until the node proves the failed container was removed. The old container is retired only after
 successful promotion. A missing DNS record or unreachable ACME challenge
 therefore results in a failed release rather than a false healthy result.
 

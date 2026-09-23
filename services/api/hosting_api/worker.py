@@ -162,6 +162,49 @@ def node_retire(node, application_id, release_id, certificate):
         connection.close()
 
 
+def node_abort(node, release, certificate):
+    parsed = private_endpoint(node)
+    context = ssl.create_default_context(cafile=certificate["ca"])
+    context.load_cert_chain(certificate["cert"], certificate["key"])
+    connection = http.client.HTTPSConnection(parsed.hostname, parsed.port, context=context, timeout=40)
+    try:
+        path = f"/v1/deployments/{release['application_id']}/{release['id']}"
+        if release["previous_release_id"]:
+            path += "/" + str(release["previous_release_id"])
+        connection.request("DELETE", path)
+        response = connection.getresponse()
+        receipt = json.loads(response.read(4096))
+        if response.status != 200 or receipt.get("state") != "ABORTED" or receipt.get("release_id") != str(release["id"]):
+            raise RuntimeError("Node failed-release cleanup not proven")
+    finally:
+        connection.close()
+
+
+def sweep_failed(conn, certificate):
+    failed = conn.execute("SELECT r.id,r.application_id,r.previous_release_id,r.node_id,r.cpu_milli,r.memory_mb,"
+                          "r.port,r.health_path,p.port AS previous_port,p.health_path AS previous_health_path,"
+                          "d.hostname,n.endpoint,n.server_name "
+                          "FROM hosting.releases r JOIN hosting.nodes n ON n.id=r.node_id "
+                          "LEFT JOIN hosting.releases p ON p.id=r.previous_release_id "
+                          "LEFT JOIN hosting.domains d ON d.application_id=r.application_id "
+                          "WHERE r.state='FAILED' AND r.cleanup_at IS NULL ORDER BY r.created_at LIMIT 20").fetchall()
+    for row in failed:
+        try:
+            if row["hostname"]:
+                restore_route(row, row, row, certificate)
+            node_abort(row, row, certificate)
+            with conn.transaction():
+                changed = conn.execute("UPDATE hosting.releases SET cleanup_at=now() "
+                                       "WHERE id=%s AND state='FAILED' AND cleanup_at IS NULL RETURNING id",
+                                       (row["id"],)).fetchone()
+                if changed:
+                    conn.execute("UPDATE hosting.nodes SET reserved_cpu_milli=reserved_cpu_milli-%s, "
+                                 "reserved_memory_mb=reserved_memory_mb-%s WHERE id=%s",
+                                 (row["cpu_milli"], row["memory_mb"], row["node_id"]))
+        except (OSError, ssl.SSLError, ValueError, RuntimeError, psycopg.Error):
+            continue
+
+
 def sweep_retirements(conn, certificate):
     old = conn.execute("SELECT r.id,r.application_id,r.node_id,r.cpu_milli,r.memory_mb,"
                        "n.endpoint,n.server_name FROM hosting.releases r JOIN hosting.nodes n ON n.id=r.node_id "
@@ -246,9 +289,6 @@ def finalize(conn, job, release, attempt, receipt=None, failure=None):
             conn.execute("UPDATE hosting.jobs SET state='FAILED',lease_until=NULL,last_error=%s WHERE id=%s",
                          (str(failure)[:120], job["id"]))
             conn.execute("UPDATE hosting.releases SET state='FAILED' WHERE id=%s", (release["id"],))
-            conn.execute("UPDATE hosting.nodes SET reserved_cpu_milli=reserved_cpu_milli-%s, "
-                         "reserved_memory_mb=reserved_memory_mb-%s WHERE id=%s",
-                         (release["cpu_milli"], release["memory_mb"], release["node_id"]))
             conn.execute("SELECT set_config('hosting.actor_sub',%s,true)", (release["requested_by"],))
             record(conn, release["organization_id"], release["requested_by"], "release.failed",
                    release["id"], uuid.uuid4())
@@ -266,9 +306,6 @@ def recover_expired(conn):
         for row in expired:
             conn.execute("UPDATE hosting.jobs SET state='FAILED',lease_until=NULL,last_error='lease expired' WHERE id=%s", (row["id"],))
             conn.execute("UPDATE hosting.releases SET state='FAILED' WHERE id=%s", (row["release_id"],))
-            conn.execute("UPDATE hosting.nodes SET reserved_cpu_milli=reserved_cpu_milli-%s, "
-                         "reserved_memory_mb=reserved_memory_mb-%s WHERE id=%s",
-                         (row["cpu_milli"], row["memory_mb"], row["node_id"]))
             conn.execute("SELECT set_config('hosting.actor_sub',%s,true)", (row["requested_by"],))
             record(conn, row["organization_id"], row["requested_by"], "release.lease_expired",
                    row["release_id"], uuid.uuid4())
@@ -276,6 +313,7 @@ def recover_expired(conn):
 
 def process_once(conn, certificate):
     refresh_nodes(conn, certificate)
+    sweep_failed(conn, certificate)
     sweep_retirements(conn, certificate)
     recover_expired(conn)
     claimed = claim(conn)

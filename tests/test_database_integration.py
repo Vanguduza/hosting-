@@ -11,7 +11,7 @@ from psycopg.rows import dict_row
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "services/api"))
 from hosting_api.__main__ import Handler
-from hosting_api.worker import claim, finalize, sweep_retirements
+from hosting_api.worker import claim, finalize, sweep_retirements, sweep_failed
 from unittest.mock import patch
 
 
@@ -101,6 +101,16 @@ class DatabaseIntegration(unittest.TestCase):
         with psycopg.connect(self.admin, row_factory=dict_row) as conn:
             self.assertEqual(conn.execute("SELECT state FROM hosting.releases WHERE id=%s", (retry["id"],)).fetchone()["state"], "FAILED")
             self.assertEqual(conn.execute("SELECT active_release_id FROM hosting.applications WHERE id=%s", (app_id,)).fetchone()["active_release_id"], release["id"])
+            reservations = conn.execute("SELECT reserved_cpu_milli,reserved_memory_mb FROM hosting.nodes WHERE id=%s", (self.node,)).fetchone()
+            self.assertEqual((reservations["reserved_cpu_milli"], reservations["reserved_memory_mb"]), (200, 256))
+        with psycopg.connect(self.worker, row_factory=dict_row, autocommit=True) as conn:
+            with patch("hosting_api.worker.node_abort") as abort, patch("hosting_api.worker.restore_route") as restore:
+                sweep_failed(conn, {})
+                abort.assert_called_once()
+                restore.assert_called_once()
+                sweep_failed(conn, {})
+                abort.assert_called_once()
+        with psycopg.connect(self.admin, row_factory=dict_row) as conn:
             reservations = conn.execute("SELECT reserved_cpu_milli,reserved_memory_mb FROM hosting.nodes WHERE id=%s", (self.node,)).fetchone()
             self.assertEqual((reservations["reserved_cpu_milli"], reservations["reserved_memory_mb"]), (100, 128))
         with psycopg.connect(self.api, row_factory=dict_row) as conn:
