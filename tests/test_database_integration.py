@@ -208,6 +208,12 @@ class DatabaseIntegration(unittest.TestCase):
                 self.assertEqual(conn.execute("SELECT node_id FROM hosting.releases WHERE id=%s",
                                               (release["id"],)).fetchone()["node_id"], self.node)
 
+        with psycopg.connect(self.api, row_factory=dict_row) as conn:
+            with conn.transaction():
+                conn.execute("SELECT set_config('hosting.actor_sub','bob',true)")
+                self.assertEqual(conn.execute("SELECT id FROM hosting.postgres_instances WHERE id=%s",
+                                              (result["id"],)).fetchall(), [])
+
     def test_zz_valkey_tenant_reservation_and_job(self):
         handler = Handler.__new__(Handler)
         with psycopg.connect(self.api, row_factory=dict_row) as conn:
@@ -250,11 +256,6 @@ class DatabaseIntegration(unittest.TestCase):
                 self.assertEqual(status, 202)
                 self.assertEqual(conn.execute("SELECT node_id FROM hosting.releases WHERE id=%s",
                                               (release["id"],)).fetchone()["node_id"], self.node)
-        with psycopg.connect(self.api, row_factory=dict_row) as conn:
-            with conn.transaction():
-                conn.execute("SELECT set_config('hosting.actor_sub','bob',true)")
-                self.assertEqual(conn.execute("SELECT id FROM hosting.postgres_instances WHERE id=%s",
-                                              (result["id"],)).fetchall(), [])
 
 
 if __name__ == "__main__":
