@@ -509,14 +509,14 @@ class DatabaseIntegration(unittest.TestCase):
                 self.assertEqual(handler.releases(conn, self.org_b, other_app, "bob", body,
                                                   "POST", uuid.uuid4()),
                                  (409, {"error": "artifact_not_admitted"}))
-                self.assertFalse(conn.execute("SELECT hosting.release_image_admitted(%s,%s,%s)",
-                                              (image, self.org_b, other_app)).fetchone()[0])
+                self.assertFalse(conn.execute("SELECT hosting.release_image_admitted(%s,%s,%s) AS admitted",
+                                              (image, self.org_b, other_app)).fetchone()["admitted"])
             with conn.transaction():
                 conn.execute("SELECT set_config('hosting.actor_sub','alice',true)")
-                self.assertTrue(conn.execute("SELECT hosting.release_image_admitted(%s,%s,%s)",
-                                             (image, self.org_a, app)).fetchone()[0])
-                self.assertTrue(conn.execute("SELECT hosting.release_image_admitted(%s,%s,%s)",
-                                             (self.image, self.org_a, app)).fetchone()[0])
+                self.assertTrue(conn.execute("SELECT hosting.release_image_admitted(%s,%s,%s) AS admitted",
+                                             (image, self.org_a, app)).fetchone()["admitted"])
+                self.assertTrue(conn.execute("SELECT hosting.release_image_admitted(%s,%s,%s) AS admitted",
+                                             (self.image, self.org_a, app)).fetchone()["admitted"])
                 self.assertEqual(handler.releases(conn, self.org_a, app, "alice", body,
                                                   "POST", uuid.uuid4())[0], 202)
 
