@@ -10,7 +10,12 @@ services:
       NODE_CA_FILE: /run/secrets/node_ca
       NODE_CERT_FILE: /run/secrets/node_cert
       NODE_KEY_FILE: /run/secrets/node_key
-    secrets: [pg_worker, node_ca, node_cert, node_key]
+      BAO_ADDR: ${BAO_ADDR:?Set a verified HTTPS OpenBao origin}
+      BAO_CA_FILE: /run/secrets/bao_ca
+      BAO_ROLE_ID_FILE: /run/secrets/bao_role_id
+      BAO_SECRET_ID_FILE: /run/secrets/bao_secret_id
+      BAO_KV_MOUNT: ${BAO_KV_MOUNT:-dial}
+    secrets: [pg_worker, node_ca, node_cert, node_key, bao_ca, bao_role_id, bao_secret_id]
     depends_on:
       db: {condition: service_healthy}
     read_only: true
@@ -23,3 +28,6 @@ secrets:
   node_ca: {file: ./.secrets/node_ca.pem}
   node_cert: {file: ./.secrets/node_client.pem}
   node_key: {file: ./.secrets/node_client.key}
+  bao_ca: {file: ./.secrets/bao_ca.pem}
+  bao_role_id: {file: ./.secrets/bao_role_id}
+  bao_secret_id: {file: ./.secrets/bao_secret_id}

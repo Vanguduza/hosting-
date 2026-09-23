@@ -336,6 +336,9 @@ def recover_expired(conn):
 
 def process_once(conn, certificate):
     refresh_nodes(conn, certificate)
+    from .postgres_jobs import process_once as process_postgres
+    if process_postgres(conn, certificate):
+        return True
     sweep_failed(conn, certificate)
     sweep_retirements(conn, certificate)
     recover_expired(conn)
@@ -352,6 +355,14 @@ def process_once(conn, certificate):
                "health_path": release["health_path"], "memory_mb": release["memory_mb"],
                "cpu_milli": release["cpu_milli"]}
     try:
+        database = conn.execute("SELECT id,node_id,secret_version,state FROM hosting.postgres_instances "
+                                "WHERE application_id=%s AND state IN ('QUEUED','PROVISIONING','READY','FAILED')",
+                                (release["application_id"],)).fetchone()
+        if database:
+            if database["state"] != "READY" or database["node_id"] != release["node_id"]:
+                raise RuntimeError("Assigned database unavailable or on a different node")
+            payload["postgres_id"] = str(database["id"])
+            payload["postgres_version"] = database["secret_version"]
         receipt = node_request(node, payload, certificate)
         domain = conn.execute("SELECT hostname,verification_token,verified_at FROM hosting.domains "
                               "WHERE application_id=%s", (release["application_id"],)).fetchone()

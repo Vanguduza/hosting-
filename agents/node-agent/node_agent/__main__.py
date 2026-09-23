@@ -52,7 +52,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_PUT(self):
         if not self.authorized():
             return self.reply(403, {"error": "forbidden"})
-        if urlsplit(self.path).path not in ("/v1/deployments", "/v1/routes", "/v1/resource-secrets"):
+        if urlsplit(self.path).path not in ("/v1/deployments", "/v1/routes", "/v1/resource-secrets", "/v1/postgres"):
             return self.reply(404, {"error": "not_found"})
         try:
             size = int(self.headers.get("Content-Length", "0"))
@@ -61,9 +61,15 @@ class Handler(BaseHTTPRequestHandler):
             data = json.loads(self.rfile.read(size))
             if not isinstance(data, dict):
                 raise ValueError()
-            receipt = (self.server.node.deploy(data) if urlsplit(self.path).path == "/v1/deployments"
-                       else self.server.node.route(data) if urlsplit(self.path).path == "/v1/routes"
-                       else self.server.node.deliver_secrets(data))
+            if urlsplit(self.path).path == "/v1/postgres":
+                from .postgres import provision
+                receipt = provision(self.server.node, data)
+            elif urlsplit(self.path).path == "/v1/deployments":
+                receipt = self.server.node.deploy(data)
+            elif urlsplit(self.path).path == "/v1/routes":
+                receipt = self.server.node.route(data)
+            else:
+                receipt = self.server.node.deliver_secrets(data)
             return self.reply(200, receipt)
         except (ValueError, json.JSONDecodeError):
             return self.reply(400, {"error": "invalid_request"})

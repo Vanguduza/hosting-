@@ -31,7 +31,8 @@ def command(args, timeout=60):
 
 
 def valid(request):
-    if set(request) != {"operation_id", "application_id", "release_id", "image", "port", "health_path", "memory_mb", "cpu_milli"}:
+    required = {"operation_id", "application_id", "release_id", "image", "port", "health_path", "memory_mb", "cpu_milli"}
+    if not required <= set(request) or set(request) - required not in (set(), {"postgres_id", "postgres_version"}):
         raise ValueError("Unexpected or missing deployment properties")
     for key in ("operation_id", "application_id", "release_id"):
         if not isinstance(request[key], str) or str(uuid.UUID(request[key])) != request[key]:
@@ -46,6 +47,11 @@ def valid(request):
         raise ValueError("Invalid memory")
     if type(request["cpu_milli"]) is not int or not 50 <= request["cpu_milli"] <= 32000:
         raise ValueError("Invalid CPU allocation")
+    if "postgres_id" in request:
+        from .postgres import identifier
+        identifier(request["postgres_id"])
+        if type(request["postgres_version"]) is not int or request["postgres_version"] < 1:
+            raise ValueError("Invalid PostgreSQL secret version")
     return request
 
 
@@ -154,6 +160,17 @@ class Node:
                     if self.exists(container):
                         self.runner(["docker", "rm", "-f", container], 30)
                     self.runner(["docker", "pull", request["image"]], 300)
+                    pg_flags = []
+                    if "postgres_id" in request:
+                        from .postgres import application_password_mount, names
+                        secret_file = application_password_mount(self, request["postgres_id"],
+                                                                 request["postgres_version"])
+                        pg_container = names(request["postgres_id"])[0]
+                        pg_flags = ["--mount", "type=bind,src=" + str(secret_file) +
+                                    ",dst=/run/secrets/postgres_password,readonly",
+                                    "-e", "DATABASE_HOST=" + pg_container, "-e", "DATABASE_NAME=appdb",
+                                    "-e", "DATABASE_USER=dial_app",
+                                    "-e", "DATABASE_PASSWORD_FILE=/run/secrets/postgres_password"]
                     self.runner([
                         "docker", "run", "-d", "--name", container,
                         "--label", "dial.application=" + app_id,
@@ -163,8 +180,12 @@ class Node:
                         "--pids-limit=256", "--memory=" + str(request["memory_mb"]) + "m",
                         "--cpus=" + str(request["cpu_milli"] / 1000),
                         "--user=10001:10001", "--tmpfs=/tmp:rw,nosuid,noexec,size=64m",
+                        *pg_flags,
                         request["image"],
                     ], 120)
+                if "postgres_id" in request:
+                    from .postgres import attach
+                    attach(self, request["postgres_id"], app_id, release_id)
                 deadline = time.monotonic() + 90
                 healthy = False
                 while time.monotonic() < deadline:

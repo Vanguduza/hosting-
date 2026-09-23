@@ -212,6 +212,14 @@ class Handler(BaseHTTPRequestHandler):
             previous = conn.execute("SELECT node_id FROM hosting.releases WHERE id=%s",
                                     (app["active_release_id"],)).fetchone()
             previous_node = previous["node_id"]
+        database = conn.execute("SELECT node_id,state FROM hosting.postgres_instances WHERE application_id=%s "
+                                "AND state IN ('QUEUED','PROVISIONING','READY')", (app_id,)).fetchone()
+        if database:
+            if database["state"] != "READY":
+                return 409, {"error": "database_not_ready"}
+            if previous_node and previous_node != database["node_id"]:
+                return 409, {"error": "database_placement_conflict"}
+            previous_node = database["node_id"]
         node = conn.execute(
             "SELECT id FROM hosting.nodes WHERE enabled AND public_ipv4 IS NOT NULL "
             "AND observed_at > now() - interval '5 minutes' "
@@ -264,6 +272,61 @@ class Handler(BaseHTTPRequestHandler):
         request = {"idempotency_key": body["idempotency_key"], "image": target["image"], "port": target["port"],
                    "health_path": target["health_path"], "memory_mb": target["memory_mb"], "cpu_milli": target["cpu_milli"]}
         return self.releases(conn, org_id, app_id, actor, request, "POST", request_id, rollback_of=target_id)
+
+    def postgres(self, conn, org_id, app_id, actor, body, method, request_id):
+        if not allowed(self.membership(conn, org_id, actor), "postgres:read" if method == "GET" else "postgres:create"):
+            return 404, {"error": "not_found"}
+        app = conn.execute("SELECT id FROM hosting.applications WHERE organization_id=%s AND id=%s",
+                           (org_id, app_id)).fetchone()
+        if not app:
+            return 404, {"error": "not_found"}
+        existing = conn.execute("SELECT id,node_id,memory_mb,cpu_milli,state,secret_version,idempotency_key "
+                                "FROM hosting.postgres_instances WHERE organization_id=%s AND application_id=%s",
+                                (org_id, app_id)).fetchone()
+        if method == "GET":
+            if not existing:
+                return 200, {"postgres": None}
+            return 200, {"postgres": {key: existing[key] for key in
+                                      ("id", "node_id", "memory_mb", "cpu_milli", "state", "secret_version")}}
+        if set(body) != {"idempotency_key", "memory_mb", "cpu_milli"} or \
+                type(body["memory_mb"]) is not int or not 256 <= body["memory_mb"] <= 32768 or \
+                type(body["cpu_milli"]) is not int or not 100 <= body["cpu_milli"] <= 32000:
+            return 400, {"error": "invalid_postgres_request"}
+        try:
+            key = uuid.UUID(body["idempotency_key"])
+            if str(key) != body["idempotency_key"]:
+                raise ValueError()
+        except (ValueError, TypeError, AttributeError):
+            return 400, {"error": "invalid_postgres_request"}
+        conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,1))", (str(app_id),))
+        existing = conn.execute("SELECT id,node_id,memory_mb,cpu_milli,state,secret_version,idempotency_key "
+                                "FROM hosting.postgres_instances WHERE application_id=%s", (app_id,)).fetchone()
+        if existing:
+            if (existing["idempotency_key"], existing["memory_mb"], existing["cpu_milli"]) != \
+                    (key, body["memory_mb"], body["cpu_milli"]):
+                return 409, {"error": "postgres_already_exists"}
+            return 200, {"id": existing["id"], "state": existing["state"], "replayed": True}
+        prior = conn.execute("SELECT node_id FROM hosting.releases WHERE application_id=%s "
+                             "AND state IN ('SERVING','QUEUED','DEPLOYING') ORDER BY created_at DESC LIMIT 1", (app_id,)).fetchone()
+        node = conn.execute(
+            "SELECT id FROM hosting.nodes WHERE enabled AND observed_at > now()-interval '5 minutes' "
+            "AND cpu_milli-reserved_cpu_milli >= %s AND memory_mb-reserved_memory_mb >= %s "
+            "AND (%s::uuid IS NULL OR id=%s::uuid) ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1",
+            (body["cpu_milli"], body["memory_mb"], prior["node_id"] if prior else None,
+             prior["node_id"] if prior else None)).fetchone()
+        if not node:
+            return 409, {"error": "capacity_unavailable"}
+        conn.execute("UPDATE hosting.nodes SET reserved_cpu_milli=reserved_cpu_milli+%s, "
+                     "reserved_memory_mb=reserved_memory_mb+%s WHERE id=%s",
+                     (body["cpu_milli"], body["memory_mb"], node["id"]))
+        instance_id, job_id = uuid.uuid4(), uuid.uuid4()
+        conn.execute("INSERT INTO hosting.postgres_instances(id,organization_id,application_id,node_id,requested_by,"
+                     "idempotency_key,memory_mb,cpu_milli) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+                     (instance_id, org_id, app_id, node["id"], actor, key, body["memory_mb"], body["cpu_milli"]))
+        conn.execute("INSERT INTO hosting.postgres_jobs(id,organization_id,instance_id) VALUES (%s,%s,%s)",
+                     (job_id, org_id, instance_id))
+        record(conn, org_id, actor, "postgres.queue", instance_id, request_id)
+        return 202, {"id": instance_id, "job_id": job_id, "state": "QUEUED", "request_id": request_id}
 
     def handle_request(self, method):
         path = urlsplit(self.path).path
@@ -327,6 +390,9 @@ class Handler(BaseHTTPRequestHandler):
                     elif match := re.fullmatch(r"/v1/organizations/([0-9a-f-]{36})/applications/([0-9a-f-]{36})/domain(/verify)?", path):
                         result = self.domains(conn, uuid.UUID(match.group(1)), uuid.UUID(match.group(2)),
                                               actor, body, method, request_id, verify=bool(match.group(3)))
+                    elif match := re.fullmatch(r"/v1/organizations/([0-9a-f-]{36})/applications/([0-9a-f-]{36})/postgres", path):
+                        result = self.postgres(conn, uuid.UUID(match.group(1)), uuid.UUID(match.group(2)),
+                                               actor, body, method, request_id)
                     elif match := re.fullmatch(r"/v1/organizations/([0-9a-f-]{36})/applications/([0-9a-f-]{36})/releases", path):
                         result = self.releases(conn, uuid.UUID(match.group(1)), uuid.UUID(match.group(2)),
                                                actor, body, method, request_id)

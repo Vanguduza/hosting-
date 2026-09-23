@@ -1,0 +1,16 @@
+# Dedicated PostgreSQL resource
+
+This path provisions one PostgreSQL 17 instance per application with a Docker named data volume, a dedicated internal bridge network, CPU/memory/pid bounds, SCRAM host auth and checksummed data files. The app login `dial_app` is a separate nonsuperuser. OpenBao KV v2 holds a first revision with independent PostgreSQL administrator and app passwords. The node receives that exact revision over mTLS; credentials never appear in API responses or job receipts. Application releases are pinned to the database's node and get a read-only password file and private network attachment before their health probe.
+
+## Operation
+
+1. Admit an official PostgreSQL 17 image by its tested `postgres:17@sha256:…` reference in the root-only node environment file. Keep a host capacity reserve and use persistent disk with monitored space. The current Docker named volume has **no enforced storage quota**.
+2. Apply `005_postgres.sql` after earlier migrations with the migration role; provision an OpenBao KV v2 mount named `dial` and an AppRole limited to `resources/*` data read/create and CAS update. Configure the worker's TLS CA and owner-only role/secret ID files; keep OpenBao independently available and backed up.
+3. An organization owner/admin sends the PostgreSQL request after creating an application. Poll the resource GET until `READY`. A `FAILED` resource retains its volume, network and capacity reservation for investigation. No automatic deletion occurs.
+4. Deploy an admitted application image. If a database is ready, the worker pins it to the database node and the agent mounts the app password at `/run/secrets/postgres_password`, provides `DATABASE_*` settings, and joins the instance's internal network before health checks. Applications must read the file rather than treating the `_FILE` variable as the password.
+
+## Recovery and limits
+
+Provision retries reuse the first OpenBao revision and labeled volume/network. An existing container is checked for resource/application ownership and the configured image before reuse. A stopped owned container is started. If a volume or network has conflicting labels, provisioning fails closed. A failed job retains its reservation; an operator must inspect the persistent data and reconcile the resource before changing its state.
+
+This is not a complete managed database product. There is no physical/logical client data backup schedule, WAL archive/PITR, offsite copy, restore drill, rotation, upgrade workflow, disk quota, per-instance TLS certificate, pooler or self-service deletion. The bridge network is private to its node; host/root/Docker administrators remain trusted. Do not put customer data in this resource until those controls have been implemented and an isolated restore has succeeded. The control database backup procedure does **not** cover client PostgreSQL volumes.

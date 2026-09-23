@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "services/api"))
 from hosting_api.__main__ import Handler
 from hosting_api.worker import claim, finalize, sweep_retirements, sweep_failed
+from hosting_api.postgres_jobs import claim as claim_postgres, finalize as finalize_postgres
 from unittest.mock import patch
 
 
@@ -162,6 +163,54 @@ class DatabaseIntegration(unittest.TestCase):
                     with conn.transaction():
                         conn.execute("INSERT INTO hosting.projects(id,organization_id,name) VALUES (%s,%s,'forged')",
                                      (uuid.uuid4(), self.org_a))
+
+    def test_z_postgres_tenant_reservation_and_job(self):
+        handler = Handler.__new__(Handler)
+        with psycopg.connect(self.api, row_factory=dict_row) as conn:
+            with conn.transaction():
+                conn.execute("SELECT set_config('hosting.actor_sub','alice',true)")
+                _, app = handler.applications(conn, self.org_a, self.project_a, "alice",
+                                               {"name": "database-client", "environment": "production"},
+                                               "POST", uuid.uuid4())
+                app_id = app["id"]
+                body = {"idempotency_key": str(uuid.uuid4()), "memory_mb": 256, "cpu_milli": 200}
+                self.assertEqual(handler.postgres(conn, self.org_b, app_id, "alice", body, "POST", uuid.uuid4())[0], 404)
+                code, result = handler.postgres(conn, self.org_a, app_id, "alice", body, "POST", uuid.uuid4())
+                self.assertEqual(code, 202)
+                self.assertEqual(handler.postgres(conn, self.org_a, app_id, "alice", body, "POST", uuid.uuid4())[0], 200)
+                self.assertEqual(handler.postgres(conn, self.org_a, app_id, "alice", {**body, "memory_mb": 512},
+                                                  "POST", uuid.uuid4())[0], 409)
+                self.assertEqual(handler.postgres(conn, self.org_a, app_id, "alice", {}, "GET", uuid.uuid4())[1]
+                                 ["postgres"]["state"], "QUEUED")
+        with psycopg.connect(self.worker, row_factory=dict_row, autocommit=True) as conn:
+            job, instance, node, attempt = claim_postgres(conn)
+            self.assertEqual(instance["id"], result["id"])
+            self.assertEqual(node["id"], self.node)
+            self.assertTrue(finalize_postgres(conn, job, instance, attempt, receipt={
+                "instance_id": str(instance["id"]), "state": "READY_PRIVATE", "secret_version": 1,
+                "host": "dial-pg-" + str(instance["id"])}))
+        with psycopg.connect(self.api, row_factory=dict_row) as conn:
+            with conn.transaction():
+                conn.execute("SELECT set_config('hosting.actor_sub','alice',true)")
+                status, data = handler.postgres(conn, self.org_a, app_id, "alice", {}, "GET", uuid.uuid4())
+                self.assertEqual((status, data["postgres"]["state"], data["postgres"]["secret_version"]),
+                                 (200, "READY", 1))
+                # The database's node is the only eligible release placement.
+                domain = handler.domains(conn, self.org_a, app_id, "alice",
+                                         {"hostname": "dbclient.example.org"}, "POST", uuid.uuid4())[1]
+                with patch("hosting_api.__main__.txt_proves", return_value=True):
+                    handler.domains(conn, self.org_a, app_id, "alice", {}, "POST", uuid.uuid4(), verify=True)
+                status, release = handler.releases(conn, self.org_a, app_id, "alice", {
+                    "idempotency_key": str(uuid.uuid4()), "image": self.image, "port": 8080,
+                    "health_path": "/health", "cpu_milli": 100, "memory_mb": 128}, "POST", uuid.uuid4())
+                self.assertEqual(status, 202)
+                self.assertEqual(conn.execute("SELECT node_id FROM hosting.releases WHERE id=%s",
+                                              (release["id"],)).fetchone()["node_id"], self.node)
+        with psycopg.connect(self.api, row_factory=dict_row) as conn:
+            with conn.transaction():
+                conn.execute("SELECT set_config('hosting.actor_sub','bob',true)")
+                self.assertEqual(conn.execute("SELECT id FROM hosting.postgres_instances WHERE id=%s",
+                                              (result["id"],)).fetchall(), [])
 
 
 if __name__ == "__main__":
