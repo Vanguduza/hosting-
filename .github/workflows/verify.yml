@@ -55,3 +55,6 @@ jobs:
       - run: docker push 127.0.0.1:5000/dial-ci/web:test
       - run: echo "NODE_RUNTIME_TEST_IMAGE=$(docker image inspect 127.0.0.1:5000/dial-ci/web:test --format '{{index .RepoDigests 0}}')" >> "$GITHUB_ENV"
       - run: python -m unittest tests.test_docker_runtime -v
+      - run: python -m unittest tests.test_ingress_runtime -v
+        env:
+          INGRESS_TEST_IMAGE: traefik:v3.5
