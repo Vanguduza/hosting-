@@ -192,6 +192,9 @@ def recover_expired(conn):
             conn.execute("UPDATE hosting.nodes SET reserved_cpu_milli=reserved_cpu_milli-%s, "
                          "reserved_memory_mb=reserved_memory_mb-%s WHERE id=%s",
                          (row["cpu_milli"], row["memory_mb"], row["node_id"]))
+            conn.execute("SELECT set_config('hosting.actor_sub',%s,true)", (row["requested_by"],))
+            record(conn, row["organization_id"], row["requested_by"], "release.lease_expired",
+                   row["release_id"], uuid.uuid4())
 
 
 def process_once(conn, certificate):
