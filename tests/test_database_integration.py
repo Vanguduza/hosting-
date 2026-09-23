@@ -1,5 +1,6 @@
 """Runs against disposable PostgreSQL in CI; skipped without TEST_ADMIN_DSN."""
 import os
+import shutil
 import hashlib
 import hmac
 import http.client
@@ -25,6 +26,7 @@ from hosting_api.github_webhook import Handler as HookHandler
 from hosting_api.github_webhook import enqueue, parse_push, verify
 from http.server import ThreadingHTTPServer
 from github_build_worker import claim as claim_build, finalize as finalize_build
+from hosting_api.migrate import apply as apply_migrations
 import admit_image
 from unittest.mock import patch
 
@@ -37,8 +39,8 @@ class DatabaseIntegration(unittest.TestCase):
         cls.api = os.environ["TEST_API_DSN"]
         cls.worker = os.environ["TEST_WORKER_DSN"]
         with psycopg.connect(cls.admin) as conn:
-            for migration in sorted((ROOT / "services/api/schema").glob("*.sql")):
-                conn.execute(migration.read_text())
+            assert apply_migrations(conn) == len(list((ROOT / "services/api/schema").glob("*.sql")))
+            assert apply_migrations(conn) == 0
             cls.org_a, cls.org_b = uuid.uuid4(), uuid.uuid4()
             cls.project_a, cls.project_b = uuid.uuid4(), uuid.uuid4()
             cls.node = uuid.uuid4()
@@ -52,6 +54,18 @@ class DatabaseIntegration(unittest.TestCase):
             conn.execute("UPDATE hosting.nodes SET public_ipv4='8.8.8.8' WHERE id=%s", (cls.node,))
             conn.execute("INSERT INTO hosting.artifact_admissions(image,sbom_sha256,source_commit,policy_revision,verification_receipt) "
                          "VALUES (%s,%s,%s,'test-policy','{}'::jsonb)", (cls.image, "b" * 64, "c" * 40))
+
+    def test_schema_migration_history_detects_drift(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary) / "schema"
+            shutil.copytree(ROOT / "services/api/schema", destination)
+            target = destination / "011_build_release_ownership.sql"
+            target.write_text(target.read_text() + "\n-- drift\n")
+            with psycopg.connect(self.admin, autocommit=True) as conn:
+                with self.assertRaisesRegex(RuntimeError, "history differs"):
+                    apply_migrations(conn, destination)
+                self.assertEqual(conn.execute("SELECT count(*) FROM hosting.schema_migrations").fetchone()[0],
+                                 len(list(destination.glob("*.sql"))))
 
     def test_rls_and_durable_release(self):
         handler = Handler.__new__(Handler)

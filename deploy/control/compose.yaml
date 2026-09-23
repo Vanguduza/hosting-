@@ -10,24 +10,30 @@ services:
     volumes:
       - pg_data:/var/lib/postgresql/data
       - ./00_create_api_role.sh:/docker-entrypoint-initdb.d/00_create_api_role.sh:ro
-      - ../../services/api/schema/001_control.sql:/docker-entrypoint-initdb.d/01_control.sql:ro
-      - ../../services/api/schema/002_release.sql:/docker-entrypoint-initdb.d/02_release.sql:ro
-      - ../../services/api/schema/003_domains.sql:/docker-entrypoint-initdb.d/03_domains.sql:ro
-      - ../../services/api/schema/004_failed_cleanup.sql:/docker-entrypoint-initdb.d/04_failed_cleanup.sql:ro
-      - ../../services/api/schema/005_postgres.sql:/docker-entrypoint-initdb.d/05_postgres.sql:ro
-      - ../../services/api/schema/006_valkey.sql:/docker-entrypoint-initdb.d/06_valkey.sql:ro
-      - ../../services/api/schema/007_team.sql:/docker-entrypoint-initdb.d/07_team.sql:ro
-      - ../../services/api/schema/008_admission.sql:/docker-entrypoint-initdb.d/08_admission.sql:ro
-      - ../../services/api/schema/009_github_builds.sql:/docker-entrypoint-initdb.d/09_github_builds.sql:ro
-      - ../../services/api/schema/010_build_visibility.sql:/docker-entrypoint-initdb.d/10_build_visibility.sql:ro
-      - ../../services/api/schema/011_build_release_ownership.sql:/docker-entrypoint-initdb.d/11_build_release_ownership.sql:ro
     healthcheck:
-      test: [CMD-SHELL, 'pg_isready -U postgres -d hosting']
+      test: [CMD-SHELL, 'pg_isready -h 127.0.0.1 -U postgres -d hosting']
       interval: 10s
       timeout: 5s
       retries: 5
     networks: [backend]
     restart: unless-stopped
+  migrate:
+    build: ../../services/api
+    command: [python, -m, hosting_api.migrate]
+    environment:
+      DB_HOST: db
+      DB_NAME: hosting
+      DB_USER: postgres
+      DB_PASSWORD_FILE: /run/secrets/pg_admin
+    secrets: [pg_admin]
+    depends_on:
+      db: {condition: service_healthy}
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    networks: [backend]
+    restart: 'no'
   api:
     build: ../../services/api
     environment:
@@ -40,7 +46,7 @@ services:
       OIDC_JWKS_URL: ${OIDC_JWKS_URL:?Configure a real HTTPS JWKS URL}
     secrets: [pg_api]
     depends_on:
-      db: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
     ports: ['127.0.0.1:8080:8080']
     read_only: true
     tmpfs: [/tmp]
@@ -59,7 +65,7 @@ services:
       GITHUB_WEBHOOK_SECRET_FILE: /run/secrets/github_webhook
     secrets: [pg_hook, github_webhook]
     depends_on:
-      db: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
     ports: ['127.0.0.1:8081:8081']
     read_only: true
     tmpfs: [/tmp]

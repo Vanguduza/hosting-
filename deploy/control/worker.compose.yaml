@@ -17,7 +17,7 @@ services:
       BAO_KV_MOUNT: ${BAO_KV_MOUNT:-dial}
     secrets: [pg_worker, node_ca, node_cert, node_key, bao_ca, bao_role_id, bao_secret_id]
     depends_on:
-      db: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]
