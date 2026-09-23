@@ -35,6 +35,7 @@ jobs:
       TEST_ADMIN_DSN: postgresql://postgres:disposable-ci-only@127.0.0.1:5432/hosting_ci
       TEST_API_DSN: postgresql://hosting_api:api-test-password@127.0.0.1:5432/hosting_ci
       TEST_WORKER_DSN: postgresql://hosting_worker:worker-test-password@127.0.0.1:5432/hosting_ci
+      TEST_ADMITTER_DSN: postgresql://hosting_admitter:admitter-test-password@127.0.0.1:5432/hosting_ci
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

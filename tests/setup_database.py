@@ -10,4 +10,5 @@ if "localhost" not in dsn and "127.0.0.1" not in dsn:
 with psycopg.connect(dsn, autocommit=True) as conn:
     conn.execute("CREATE ROLE hosting_api LOGIN PASSWORD 'api-test-password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT")
     conn.execute("CREATE ROLE hosting_worker LOGIN PASSWORD 'worker-test-password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT")
+    conn.execute("CREATE ROLE hosting_admitter LOGIN PASSWORD 'admitter-test-password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT")
     conn.execute("CREATE DATABASE hosting_ci")

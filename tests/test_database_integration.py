@@ -336,6 +336,25 @@ class DatabaseIntegration(unittest.TestCase):
                 self.assertEqual(conn.execute("SELECT role FROM hosting.memberships WHERE organization_id=%s",
                                               (self.org_a,)).fetchall(), [])
 
+    def test_restricted_image_admission_identity(self):
+        image = "registry.example.test/team/verified@sha256:" + "d" * 64
+        with psycopg.connect(os.environ["TEST_ADMITTER_DSN"], row_factory=dict_row) as conn:
+            with conn.transaction():
+                conn.execute("INSERT INTO hosting.artifact_admissions "
+                             "(image,sbom_sha256,source_commit,policy_revision,verification_receipt) "
+                             "VALUES (%s,%s,%s,'ci','{}'::jsonb)",
+                             (image, "e" * 64, "f" * 40))
+                for statement in ("SELECT id FROM hosting.organizations",
+                                  "DELETE FROM hosting.artifact_admissions WHERE image=%s",
+                                  "INSERT INTO hosting.organizations(id,name) VALUES (%s,'forged')"):
+                    with self.assertRaises(psycopg.errors.InsufficientPrivilege):
+                        with conn.transaction():
+                            value = image if "%s" in statement and "DELETE" in statement else uuid.uuid4()
+                            conn.execute(statement, (value,) if "%s" in statement else ())
+        with psycopg.connect(self.admin, row_factory=dict_row) as conn:
+            self.assertEqual(conn.execute("SELECT policy_revision FROM hosting.artifact_admissions WHERE image=%s",
+                                          (image,)).fetchone()["policy_revision"], "ci")
+
 
 if __name__ == "__main__":
     unittest.main()

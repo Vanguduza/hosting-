@@ -35,9 +35,16 @@ def main():
         parser.error("invalid policy revision")
     if not args.cosign_public_key.is_file():
         parser.error("trusted Cosign public key missing")
-    dsn = os.environ.get("HOSTING_MIGRATION_DSN")
+    dsn = os.environ.get("HOSTING_ADMISSION_DSN")
     if not dsn:
-        parser.error("HOSTING_MIGRATION_DSN required (private operator database connection)")
+        parser.error("HOSTING_ADMISSION_DSN required (private restricted builder connection)")
+    # Reject accidental privileged operator credentials before scanning or
+    # writing evidence. An admission worker must never own schema or tenant state.
+    with psycopg.connect(dsn, connect_timeout=5) as conn:
+        role = conn.execute("SELECT current_user,rolsuper,rolbypassrls FROM pg_roles "
+                            "WHERE rolname=current_user").fetchone()
+        if not role or role != ("hosting_admitter", False, False):
+            raise RuntimeError("A restricted hosting_admitter connection is required")
 
     verification = json.loads(run(["cosign", "verify", "--key", str(args.cosign_public_key), args.image]))
     if not isinstance(verification, list) or not verification:

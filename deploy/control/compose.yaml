@@ -6,7 +6,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_DB: hosting
       POSTGRES_PASSWORD_FILE: /run/secrets/pg_admin
-    secrets: [pg_admin, pg_api, pg_worker]
+    secrets: [pg_admin, pg_api, pg_worker, pg_admitter]
     volumes:
       - pg_data:/var/lib/postgresql/data
       - ./00_create_api_role.sh:/docker-entrypoint-initdb.d/00_create_api_role.sh:ro
@@ -17,6 +17,7 @@ services:
       - ../../services/api/schema/005_postgres.sql:/docker-entrypoint-initdb.d/05_postgres.sql:ro
       - ../../services/api/schema/006_valkey.sql:/docker-entrypoint-initdb.d/06_valkey.sql:ro
       - ../../services/api/schema/007_team.sql:/docker-entrypoint-initdb.d/07_team.sql:ro
+      - ../../services/api/schema/008_admission.sql:/docker-entrypoint-initdb.d/08_admission.sql:ro
     healthcheck:
       test: [CMD-SHELL, 'pg_isready -U postgres -d hosting']
       interval: 10s
@@ -53,3 +54,4 @@ secrets:
   pg_admin: {file: ./.secrets/pg_admin}
   pg_api: {file: ./.secrets/pg_api}
   pg_worker: {file: ./.secrets/pg_worker}
+  pg_admitter: {file: ./.secrets/pg_admitter}
