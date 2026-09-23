@@ -6,6 +6,11 @@ does not need a Docker socket inside Traefik. The node agent writes one validate
 file-provider document per application. Each HTTPS response includes
 `X-Dial-Release`, and the worker verifies that header over a trusted TLS
 connection to the registered public node IP before committing `SERVING`.
+Each application runs on its own labeled Docker bridge. The node agent joins
+Traefik to that application's bridge only after verifying container ownership
+and private health; unrelated application containers cannot resolve each
+other through a shared runtime bridge. The ingress remains a trusted component
+with access to the networks of currently routed applications.
 
 ## Prepare the selected node
 

@@ -30,6 +30,9 @@ class IngressRuntime(unittest.TestCase):
     def test_release_header_over_trusted_tls_and_host_route(self):
         app, release = str(uuid.uuid4()), str(uuid.uuid4())
         app_container = "dial-" + release
+        app_network = "dial-app-net-" + app
+        other_network = "dial-app-net-" + str(uuid.uuid4())
+        other_container = "dial-isolation-test-" + uuid.uuid4().hex[:8]
         ingress_container = "dial-ingress-test-" + uuid.uuid4().hex[:8]
         host = "app.example.org"
         with tempfile.TemporaryDirectory(prefix="dial-ingress-test-") as directory:
@@ -49,9 +52,17 @@ class IngressRuntime(unittest.TestCase):
             try:
                 if subprocess.run(["docker", "network", "inspect", "dial-runtime"], capture_output=True).returncode:
                     docker("network", "create", "dial-runtime")
-                docker("run", "-d", "--name", app_container, "--network", "dial-runtime",
+                docker("network", "create", app_network)
+                docker("network", "create", other_network)
+                docker("run", "-d", "--name", app_container, "--network", app_network,
                        "--label", "dial.application=" + app, "--label", "dial.release=" + release,
                        os.environ["NODE_RUNTIME_TEST_IMAGE"])
+                docker("run", "-d", "--name", other_container, "--network", other_network,
+                       os.environ["NODE_RUNTIME_TEST_IMAGE"])
+                isolated = subprocess.run(["docker", "exec", other_container, "python", "-c",
+                                           "import socket; socket.getaddrinfo('" + app_container + "',8080)"],
+                                          capture_output=True, timeout=10)
+                self.assertNotEqual(isolated.returncode, 0, "Separate application network resolved another tenant")
                 docker("run", "-d", "--name", ingress_container, "--network", "dial-runtime",
                        "-p", f"127.0.0.1:{port}:443", "-v", str(root / "routes") + ":/routes:ro",
                        "-v", str(root / "certs") + ":/certs:ro",
@@ -62,6 +73,7 @@ class IngressRuntime(unittest.TestCase):
                        "--certificatesresolvers.acme.acme.email=ci@example.org",
                        "--certificatesresolvers.acme.acme.storage=/tmp/acme.json",
                        "--certificatesresolvers.acme.acme.httpchallenge.entrypoint=web")
+                docker("network", "connect", app_network, ingress_container)
                 context = ssl.create_default_context(cafile=str(root / "certs/tls.crt"))
                 deadline = time.monotonic() + 12
                 while True:
@@ -82,7 +94,8 @@ class IngressRuntime(unittest.TestCase):
                                       docker("logs", ingress_container)[-12000:])
                         time.sleep(1)
             finally:
-                subprocess.run(["docker", "rm", "-f", ingress_container, app_container], capture_output=True)
+                subprocess.run(["docker", "rm", "-f", ingress_container, app_container, other_container], capture_output=True)
+                subprocess.run(["docker", "network", "rm", app_network, other_network], capture_output=True)
 
 
 if __name__ == "__main__":

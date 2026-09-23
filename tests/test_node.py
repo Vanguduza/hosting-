@@ -22,26 +22,51 @@ def request(**updates):
 class DockerFixture:
     def __init__(self):
         self.containers = {}
+        self.container_networks = {}
+        self.networks = {}
         self.calls = []
 
     def __call__(self, args, timeout):
         self.calls.append(args)
         if args[1:3] == ["network", "inspect"]:
-            return "[]"
+            if args[3] not in self.networks:
+                raise OperationError("network absent")
+            return json.dumps([self.networks[args[3]]])
+        if args[1:3] == ["network", "create"]:
+            label = args[args.index("--label") + 1]
+            self.networks[args[-1]] = {"Driver": "bridge", "Labels": dict([label.split("=", 1)])}
+        if args[1:3] == ["network", "connect"]:
+            self.container_networks[args[4]].add(args[3])
         if args[1] == "inspect":
             if args[2] not in self.containers:
                 raise OperationError("absent")
             return json.dumps([{"State": {"Running": True}, "NetworkSettings": {"Networks": {
-                "dial-runtime": {"IPAddress": "172.22.0.2"}}}, "Config": {"Labels": self.containers[args[2]]}}])
+                network: {"IPAddress": "172.22.0.2"} for network in self.container_networks[args[2]]}},
+                "Config": {"Labels": self.containers[args[2]]}}])
         if args[1] == "run":
             labels = [args[index + 1] for index, value in enumerate(args) if value == "--label"]
-            self.containers[args[args.index("--name") + 1]] = dict(label.split("=", 1) for label in labels)
+            name = args[args.index("--name") + 1]
+            self.containers[name] = dict(label.split("=", 1) for label in labels)
+            self.container_networks[name] = {args[args.index("--network") + 1]}
         if args[1:3] == ["rm", "-f"]:
             self.containers.pop(args[3], None)
+            self.container_networks.pop(args[3], None)
         return "ok"
 
 
 class NodeTests(unittest.TestCase):
+    def test_existing_foreign_application_network_is_rejected(self):
+        fixture = DockerFixture()
+        command = request()
+        fixture.networks[Node.application_network(command["application_id"])] = {
+            "Driver": "bridge", "Labels": {"dial.application": str(uuid.uuid4())}}
+        with tempfile.TemporaryDirectory() as directory:
+            node = Node(Path(directory) / "agent.sqlite3", runner=fixture,
+                        health_probe=lambda ip, port, path: True)
+            with self.assertRaisesRegex(OperationError, "network ownership mismatch"):
+                node.deploy(command)
+            self.assertNotIn(Node.container(command["release_id"]), fixture.containers)
+
     def test_reject_mutable_or_privileged_input(self):
         for change in ({"image": "registry.example.test/app:latest"},
                        {"port": True}, {"health_path": "//evil.example"},
@@ -104,6 +129,7 @@ class NodeTests(unittest.TestCase):
     def test_public_route_is_atomic_and_retirement_guarded(self):
         fixture = DockerFixture()
         fixture.containers["dial-ingress"] = {}
+        fixture.container_networks["dial-ingress"] = {"dial-runtime"}
         with tempfile.TemporaryDirectory() as directory:
             node = Node(Path(directory) / "agent.sqlite3", runner=fixture,
                         health_probe=lambda ip, port, path: True)
@@ -132,6 +158,7 @@ class NodeTests(unittest.TestCase):
     def test_failed_release_compensation_retains_previous_container(self):
         fixture = DockerFixture()
         fixture.containers["dial-ingress"] = {}
+        fixture.container_networks["dial-ingress"] = {"dial-runtime"}
         with tempfile.TemporaryDirectory() as directory:
             node = Node(Path(directory) / "agent.sqlite3", runner=fixture,
                         health_probe=lambda ip, port, path: True)

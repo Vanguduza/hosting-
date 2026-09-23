@@ -106,22 +106,37 @@ class Node:
     def container(release_id):
         return "dial-" + release_id
 
+    @staticmethod
+    def application_network(application_id):
+        return "dial-app-net-" + application_id
+
     def inspect(self, container):
         try:
             raw = self.runner(["docker", "inspect", container], 15)
             obj = json.loads(raw)[0]
             running = obj["State"]["Running"]
             networks = obj["NetworkSettings"]["Networks"]
-            ip = networks[self.network]["IPAddress"]
+            labels = obj.get("Config", {}).get("Labels", {})
+            network = (self.application_network(labels["dial.application"])
+                       if labels.get("dial.release") else self.network)
+            ip = networks[network]["IPAddress"]
             return running, ip
         except (OperationError, ValueError, KeyError, IndexError, TypeError):
             return False, None
 
-    def network_ready(self):
+    def network_ready(self, application_id):
+        network = self.application_network(application_id)
         try:
-            self.runner(["docker", "network", "inspect", self.network], 15)
+            existing = json.loads(self.runner(["docker", "network", "inspect", network], 15))[0]
         except OperationError:
-            self.runner(["docker", "network", "create", "--driver", "bridge", self.network], 30)
+            self.runner(["docker", "network", "create", "--driver", "bridge",
+                         "--label", "dial.application=" + application_id, network], 30)
+            return
+        except (ValueError, IndexError, TypeError):
+            raise OperationError("Invalid application network inspection") from None
+        if existing.get("Labels", {}).get("dial.application") != application_id or \
+                existing.get("Driver") != "bridge":
+            raise OperationError("Application network ownership mismatch")
 
     def deploy(self, data):
         request = valid(data)
@@ -153,7 +168,7 @@ class Node:
                 db.execute("INSERT INTO operations(id,input_hash,state) VALUES (?,?,'RUNNING') ON CONFLICT(id) DO UPDATE SET state='RUNNING'",
                            (operation_id, digest))
             try:
-                self.network_ready()
+                self.network_ready(app_id)
                 running, ip = self.inspect(container)
                 if not running:
                     # A crash can leave a stopped container under the same release name.
@@ -175,7 +190,7 @@ class Node:
                         "docker", "run", "-d", "--name", container,
                         "--label", "dial.application=" + app_id,
                         "--label", "dial.release=" + release_id,
-                        "--network", self.network,
+                        "--network", self.application_network(app_id),
                         "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges",
                         "--pids-limit=256", "--memory=" + str(request["memory_mb"]) + "m",
                         "--cpus=" + str(request["cpu_milli"] / 1000),
@@ -266,6 +281,10 @@ class Node:
             running, ip = self.inspect(container)
             if not running or not ip or not self.health_probe(ip, data["port"], data["health_path"]):
                 raise OperationError("Route upstream is not healthy")
+            app_network = self.application_network(app)
+            ingress_info = json.loads(self.runner(["docker", "inspect", "dial-ingress"], 15))[0]
+            if app_network not in ingress_info.get("NetworkSettings", {}).get("Networks", {}):
+                self.runner(["docker", "network", "connect", app_network, "dial-ingress"], 30)
             document = route_toml(app, release, data["hostname"], container, data["port"])
             route_file = self.routes_dir / (app + ".toml")
             with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.routes_dir,

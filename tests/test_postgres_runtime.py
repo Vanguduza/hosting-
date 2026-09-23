@@ -53,6 +53,8 @@ class PostgresRuntime(unittest.TestCase):
                 self.assertEqual(app_receipt["state"], "HEALTHY_PRIVATE")
                 workload = json.loads(subprocess.check_output(["docker", "inspect", node.container(release)]))[0]
                 self.assertIn(network, workload["NetworkSettings"]["Networks"])
+                self.assertIn(node.application_network(app), workload["NetworkSettings"]["Networks"])
+                self.assertNotIn("dial-runtime", workload["NetworkSettings"]["Networks"])
                 self.assertEqual(workload["Config"]["Env"].count("DATABASE_PASSWORD_FILE=/run/secrets/postgres_password"), 1)
                 if os.environ.get("POSTGRES_RUNTIME_BACKUP"):
                     backup_env = {key: os.environ.get(key) for key in
