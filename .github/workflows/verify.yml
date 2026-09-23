@@ -36,6 +36,8 @@ jobs:
       TEST_API_DSN: postgresql://hosting_api:api-test-password@127.0.0.1:5432/hosting_ci
       TEST_WORKER_DSN: postgresql://hosting_worker:worker-test-password@127.0.0.1:5432/hosting_ci
       TEST_ADMITTER_DSN: postgresql://hosting_admitter:admitter-test-password@127.0.0.1:5432/hosting_ci
+      TEST_HOOK_DSN: postgresql://hosting_hook:hook-test-password@127.0.0.1:5432/hosting_ci
+      TEST_BUILDWORKER_DSN: postgresql://hosting_buildworker:buildworker-test-password@127.0.0.1:5432/hosting_ci
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

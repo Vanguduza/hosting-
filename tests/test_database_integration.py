@@ -1,9 +1,12 @@
 """Runs against disposable PostgreSQL in CI; skipped without TEST_ADMIN_DSN."""
 import os
 import hashlib
+import hmac
+import http.client
 import json
 import sys
 import tempfile
+import threading
 import unittest
 import uuid
 from pathlib import Path
@@ -18,6 +21,10 @@ from hosting_api.__main__ import Handler
 from hosting_api.worker import claim, finalize, sweep_retirements, sweep_failed
 from hosting_api.postgres_jobs import claim as claim_postgres, finalize as finalize_postgres
 from hosting_api.valkey_jobs import claim as claim_valkey, finalize as finalize_valkey
+from hosting_api.github_webhook import Handler as HookHandler
+from hosting_api.github_webhook import enqueue, parse_push, verify
+from http.server import ThreadingHTTPServer
+from github_build_worker import claim as claim_build, finalize as finalize_build
 import admit_image
 from unittest.mock import patch
 
@@ -385,6 +392,83 @@ class DatabaseIntegration(unittest.TestCase):
             with patch.dict(os.environ, {"HOSTING_ADMISSION_DSN": os.environ["TEST_ADMITTER_DSN"]}), \
                     patch.object(sys, "argv", args), self.assertRaises(RuntimeError):
                 admit_image.main()
+
+    def test_signed_push_durable_build_queue_and_restricted_roles(self):
+        app, source, delivery = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+        repo_id = uuid.uuid4().int % (2**31) + 1
+        commit = "3" * 40
+        image = "registry.example.test/team/gitweb@sha256:" + "4" * 64
+        with psycopg.connect(self.admin) as conn:
+            conn.execute("INSERT INTO hosting.applications(id,organization_id,project_id,environment,name) "
+                         "VALUES (%s,%s,%s,'ci','gitweb')", (app, self.org_a, self.project_a))
+            conn.execute("INSERT INTO hosting.git_sources "
+                         "(id,organization_id,application_id,repository_id,full_name,branch,"
+                         "image_repository,builder,policy_revision) "
+                         "VALUES (%s,%s,%s,%s,'Vanguduza/hosting-','main',"
+                         "'registry.example.test/team/gitweb','ci_builder','ci_policy')",
+                         (source, self.org_a, app, repo_id))
+        secret = b"github-ci-hmac-secret-32-bytes-minimum"
+        server = ThreadingHTTPServer(("127.0.0.1", 0), HookHandler)
+        server.secret, server.dsn = secret, os.environ["TEST_HOOK_DSN"]
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        body = json.dumps({"repository": {"id": repo_id, "full_name": "Vanguduza/hosting-"},
+                           "ref": "refs/heads/main", "after": commit, "deleted": False}).encode()
+        headers = {"Content-Type": "application/json", "X-GitHub-Event": "push",
+                   "X-GitHub-Delivery": str(delivery),
+                   "X-Hub-Signature-256": "sha256=" + hmac.new(secret, body, hashlib.sha256).hexdigest()}
+        def request(payload, metadata):
+            client = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+            try:
+                client.request("POST", "/v1/github/push", payload, metadata)
+                result = client.getresponse()
+                return result.status, json.loads(result.read())
+            finally:
+                client.close()
+        try:
+            self.assertTrue(verify(secret, body, headers["X-Hub-Signature-256"]))
+            self.assertEqual(parse_push(json.loads(body))[0], repo_id)
+            self.assertEqual(request(body, {**headers, "X-Hub-Signature-256": "sha256=" + "0" * 64})[0], 401)
+            self.assertEqual(request(body, headers)[1]["state"], "QUEUED")
+            self.assertEqual(request(body, headers)[1]["state"], "REPLAYED")
+            changed = json.dumps({**json.loads(body), "after": "5" * 40}).encode()
+            changed_headers = {**headers, "X-Hub-Signature-256": "sha256=" +
+                               hmac.new(secret, changed, hashlib.sha256).hexdigest()}
+            self.assertEqual(request(changed, changed_headers)[0], 400)
+            wrong_branch = json.dumps({**json.loads(body), "ref": "refs/heads/untrusted"}).encode()
+            wrong_headers = {**headers, "X-GitHub-Delivery": str(uuid.uuid4()),
+                             "X-Hub-Signature-256": "sha256=" +
+                             hmac.new(secret, wrong_branch, hashlib.sha256).hexdigest()}
+            self.assertEqual(request(wrong_branch, wrong_headers)[1]["state"], "IGNORED")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+        with psycopg.connect(os.environ["TEST_HOOK_DSN"]) as conn:
+            with self.assertRaises(psycopg.errors.InsufficientPrivilege):
+                with conn.transaction():
+                    conn.execute("UPDATE hosting.github_builds SET state='ADMITTED' WHERE delivery_id=%s", (delivery,))
+        with psycopg.connect(os.environ["TEST_BUILDWORKER_DSN"], row_factory=dict_row,
+                             autocommit=True) as conn:
+            job, registered, attempt = claim_build(conn)
+            self.assertEqual((job["delivery_id"], registered["id"], attempt), (delivery, source, 1))
+            self.assertTrue(finalize_build(conn, job, registered, attempt, failure="RuntimeError"))
+        with psycopg.connect(self.admin) as conn:
+            conn.execute("UPDATE hosting.github_builds SET next_attempt_at=now() WHERE delivery_id=%s", (delivery,))
+            receipt = {"image": image, "source_commit": commit, "policy_revision": "ci_policy"}
+            conn.execute("INSERT INTO hosting.artifact_admissions "
+                         "(image,sbom_sha256,source_commit,policy_revision,verification_receipt) "
+                         "VALUES (%s,%s,%s,'ci_policy',%s::jsonb)",
+                         (image, "6" * 64, commit, json.dumps(receipt)))
+        with psycopg.connect(os.environ["TEST_BUILDWORKER_DSN"], row_factory=dict_row,
+                             autocommit=True) as conn:
+            job, registered, attempt = claim_build(conn)
+            self.assertEqual(attempt, 2)
+            self.assertTrue(finalize_build(conn, job, registered, attempt, receipt=receipt))
+            self.assertIsNone(claim_build(conn))
+        with psycopg.connect(self.admin) as conn:
+            self.assertEqual(conn.execute("SELECT state,image FROM hosting.github_builds WHERE delivery_id=%s",
+                                          (delivery,)).fetchone(), ("ADMITTED", image))
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_DB: hosting
       POSTGRES_PASSWORD_FILE: /run/secrets/pg_admin
-    secrets: [pg_admin, pg_api, pg_worker, pg_admitter]
+    secrets: [pg_admin, pg_api, pg_worker, pg_admitter, pg_hook, pg_buildworker]
     volumes:
       - pg_data:/var/lib/postgresql/data
       - ./00_create_api_role.sh:/docker-entrypoint-initdb.d/00_create_api_role.sh:ro
@@ -18,6 +18,7 @@ services:
       - ../../services/api/schema/006_valkey.sql:/docker-entrypoint-initdb.d/06_valkey.sql:ro
       - ../../services/api/schema/007_team.sql:/docker-entrypoint-initdb.d/07_team.sql:ro
       - ../../services/api/schema/008_admission.sql:/docker-entrypoint-initdb.d/08_admission.sql:ro
+      - ../../services/api/schema/009_github_builds.sql:/docker-entrypoint-initdb.d/09_github_builds.sql:ro
     healthcheck:
       test: [CMD-SHELL, 'pg_isready -U postgres -d hosting']
       interval: 10s
@@ -45,6 +46,25 @@ services:
     security_opt: [no-new-privileges:true]
     networks: [backend, egress]
     restart: unless-stopped
+  github-webhook:
+    build: ../../services/api
+    command: [python, -m, hosting_api.github_webhook]
+    environment:
+      DB_HOST: db
+      DB_NAME: hosting
+      DB_USER: hosting_hook
+      DB_PASSWORD_FILE: /run/secrets/pg_hook
+      GITHUB_WEBHOOK_SECRET_FILE: /run/secrets/github_webhook
+    secrets: [pg_hook, github_webhook]
+    depends_on:
+      db: {condition: service_healthy}
+    ports: ['127.0.0.1:8081:8081']
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    networks: [backend]
+    restart: unless-stopped
 networks:
   backend: {internal: true}
   egress: {}
@@ -55,3 +75,6 @@ secrets:
   pg_api: {file: ./.secrets/pg_api}
   pg_worker: {file: ./.secrets/pg_worker}
   pg_admitter: {file: ./.secrets/pg_admitter}
+  pg_hook: {file: ./.secrets/pg_hook}
+  pg_buildworker: {file: ./.secrets/pg_buildworker}
+  github_webhook: {file: ./.secrets/github_webhook}

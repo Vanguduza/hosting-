@@ -11,4 +11,6 @@ with psycopg.connect(dsn, autocommit=True) as conn:
     conn.execute("CREATE ROLE hosting_api LOGIN PASSWORD 'api-test-password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT")
     conn.execute("CREATE ROLE hosting_worker LOGIN PASSWORD 'worker-test-password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT")
     conn.execute("CREATE ROLE hosting_admitter LOGIN PASSWORD 'admitter-test-password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT")
+    conn.execute("CREATE ROLE hosting_hook LOGIN PASSWORD 'hook-test-password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT")
+    conn.execute("CREATE ROLE hosting_buildworker LOGIN PASSWORD 'buildworker-test-password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT")
     conn.execute("CREATE DATABASE hosting_ci")
