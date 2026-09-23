@@ -61,7 +61,7 @@ class IngressRuntime(unittest.TestCase):
                        "--certificatesresolvers.acme.acme.storage=/tmp/acme.json",
                        "--certificatesresolvers.acme.acme.httpchallenge.entrypoint=web")
                 context = ssl.create_default_context(cafile=str(root / "tls.crt"))
-                deadline = time.monotonic() + 40
+                deadline = time.monotonic() + 12
                 while True:
                     try:
                         with socket.create_connection(("127.0.0.1", port), timeout=2) as raw:
@@ -77,7 +77,7 @@ class IngressRuntime(unittest.TestCase):
                     except (OSError, ssl.SSLError, http.client.HTTPException):
                         if time.monotonic() >= deadline:
                             self.fail("Traefik TLS route did not become available:\n" +
-                                      docker("logs", ingress_container)[-3000:])
+                                      docker("logs", ingress_container)[-12000:])
                         time.sleep(1)
             finally:
                 subprocess.run(["docker", "rm", "-f", ingress_container, app_container], capture_output=True)
