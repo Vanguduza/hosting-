@@ -52,17 +52,18 @@ class Handler(BaseHTTPRequestHandler):
     def do_PUT(self):
         if not self.authorized():
             return self.reply(403, {"error": "forbidden"})
-        if urlsplit(self.path).path not in ("/v1/deployments", "/v1/routes"):
+        if urlsplit(self.path).path not in ("/v1/deployments", "/v1/routes", "/v1/resource-secrets"):
             return self.reply(404, {"error": "not_found"})
         try:
             size = int(self.headers.get("Content-Length", "0"))
-            if not 1 <= size <= 4096:
+            if not 1 <= size <= (65536 if urlsplit(self.path).path == "/v1/resource-secrets" else 4096):
                 return self.reply(413, {"error": "invalid_body_size"})
             data = json.loads(self.rfile.read(size))
             if not isinstance(data, dict):
                 raise ValueError()
             receipt = (self.server.node.deploy(data) if urlsplit(self.path).path == "/v1/deployments"
-                       else self.server.node.route(data))
+                       else self.server.node.route(data) if urlsplit(self.path).path == "/v1/routes"
+                       else self.server.node.deliver_secrets(data))
             return self.reply(200, receipt)
         except (ValueError, json.JSONDecodeError):
             return self.reply(400, {"error": "invalid_request"})
@@ -120,7 +121,8 @@ def main():
     context.load_cert_chain(os.environ["NODE_CERT_FILE"], os.environ["NODE_KEY_FILE"])
     server = ThreadingHTTPServer((os.environ["NODE_BIND"], int(os.environ["NODE_PORT"])), Handler)
     server.socket = context.wrap_socket(server.socket, server_side=True)
-    server.node = Node(os.environ["NODE_STATE_FILE"], routes_dir=os.environ.get("NODE_ROUTES_DIR"))
+    server.node = Node(os.environ["NODE_STATE_FILE"], routes_dir=os.environ.get("NODE_ROUTES_DIR"),
+                       secrets_dir=os.environ.get("NODE_SECRETS_DIR"))
     server.client_cn = os.environ["NODE_CLIENT_CN"]
     server.serve_forever()
 

@@ -64,13 +64,16 @@ def probe(ip, port, path, timeout=3):
 
 
 class Node:
-    def __init__(self, state_file, runner=command, health_probe=probe, network="dial-runtime", routes_dir=None):
+    def __init__(self, state_file, runner=command, health_probe=probe, network="dial-runtime", routes_dir=None, secrets_dir=None):
         self.state_file = Path(state_file)
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
         self.runner, self.health_probe, self.network = runner, health_probe, network
         self.routes_dir = Path(routes_dir) if routes_dir else self.state_file.parent / "routes"
         self.routes_dir.mkdir(parents=True, exist_ok=True)
         os.chmod(self.routes_dir, 0o700)
+        self.secrets_dir = Path(secrets_dir) if secrets_dir else self.state_file.parent / "secrets"
+        self.secrets_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(self.secrets_dir, 0o700)
         self.lock = threading.RLock()
         with self.db() as db:
             db.execute("CREATE TABLE IF NOT EXISTS operations (id TEXT PRIMARY KEY, input_hash TEXT NOT NULL, state TEXT NOT NULL, receipt TEXT)")
@@ -321,6 +324,14 @@ class Node:
         running, ip = self.inspect(row["container"])
         return {"application_id": app_id, "release_id": row["release_id"],
                 "state": "RUNNING_PRIVATE" if running and ip else "UNREACHABLE"}
+
+    def deliver_secrets(self, data):
+        from .secrets import install
+        if not isinstance(data, dict) or set(data) != {"resource_id", "version", "values"}:
+            raise ValueError("Invalid secret delivery")
+        with self.lock, self.file_lock():
+            install(self.secrets_dir, data["resource_id"], data["version"], data["values"])
+        return {"resource_id": data["resource_id"], "version": data["version"], "state": "STORED"}
 
     @staticmethod
     def capacity():

@@ -14,6 +14,7 @@ from psycopg.rows import dict_row
 
 from .__main__ import database_dsn, record
 from .domains import address_proves, txt_proves
+from .secrets import OpenBao
 
 
 PRIVATE_RANGES = [ipaddress.ip_network(cidr) for cidr in
@@ -70,6 +71,28 @@ def route_request(node, data, certificate, remove=False):
         if response.status != 200 or receipt.get("release_id") != data["release_id"] or \
                 receipt.get("state") != ("UNROUTED" if remove else "ROUTED"):
             raise RuntimeError("Node route operation was not proven")
+        return receipt
+    finally:
+        connection.close()
+
+
+def deliver_secrets(node, resource_id, version, certificate, bao=None):
+    """Retrieve one exact OpenBao revision and install it over private mTLS."""
+    bao = bao or OpenBao.environment()
+    observed_version, values = bao.get(resource_id, version=version)
+    parsed = private_endpoint(node)
+    context = ssl.create_default_context(cafile=certificate["ca"])
+    context.load_cert_chain(certificate["cert"], certificate["key"])
+    connection = http.client.HTTPSConnection(parsed.hostname, parsed.port, context=context, timeout=15)
+    try:
+        data = {"resource_id": str(resource_id), "version": observed_version, "values": values}
+        connection.request("PUT", "/v1/resource-secrets", body=json.dumps(data, separators=(",", ":")),
+                           headers={"Content-Type": "application/json"})
+        response = connection.getresponse()
+        receipt = json.loads(response.read(2048))
+        if (response.status != 200 or receipt.get("state") != "STORED" or
+                receipt.get("resource_id") != str(resource_id) or receipt.get("version") != version):
+            raise RuntimeError("Node secret revision not proven")
         return receipt
     finally:
         connection.close()
