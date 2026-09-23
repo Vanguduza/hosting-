@@ -86,9 +86,13 @@ def provision(node, data):
             if network_info and (network_info.get("Labels", {}).get("dial.postgres") != instance or
                                  not network_info.get("Internal")):
                 raise OperationError("Existing PostgreSQL network ownership mismatch")
-            # Initial SQL is prepared before container creation, and is deleted
-            # only after readiness. Its parent is owner-only on the host.
-            sql = secret_dir / "init.sql"
+            # Keep the init script outside the immutable OpenBao revision;
+            # exact-version secret replay must never see a generated extra file.
+            init_dir = node.secrets_dir / "pg-init"
+            init_dir.mkdir(mode=0o700, exist_ok=True)
+            if init_dir.is_symlink() or init_dir.stat().st_mode & 0o077:
+                raise OperationError("PostgreSQL initialization directory unsafe")
+            sql = init_dir / (instance + "-" + str(data["secret_version"]) + ".sql")
             raw_password = app_password.read_text()
             if not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", raw_password):
                 raise OperationError("Invalid generated PostgreSQL credential")

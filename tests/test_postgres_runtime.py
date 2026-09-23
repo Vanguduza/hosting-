@@ -53,6 +53,9 @@ class PostgresRuntime(unittest.TestCase):
                 self.assertIn(network, workload["NetworkSettings"]["Networks"])
                 self.assertEqual(workload["Config"]["Env"].count("DATABASE_PASSWORD_FILE=/run/secrets/postgres_password"), 1)
                 self.assertEqual(provision(node, payload), receipt)
+                self.assertEqual(node.deliver_secrets({"resource_id": instance, "version": 1,
+                                                       "values": {"postgres_password": "B" * 48,
+                                                                  "app_password": password}})["state"], "STORED")
                 subprocess.run(["docker", "restart", container], check=True, capture_output=True)
                 self.assertEqual(provision(node, payload), receipt)
                 with psycopg.connect(host=ip, port=5432, user="dial_app", password=password, dbname="appdb",
