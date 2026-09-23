@@ -20,6 +20,13 @@ def run(args, *, timeout=600):
     return result.stdout
 
 
+def proof_json(contents):
+    try:
+        return json.loads(contents)
+    except (ValueError, TypeError) as exc:
+        raise RuntimeError("Stored admission proof is invalid JSON") from exc
+
+
 def stored_evidence(directory, artifact_id, image, commit, policy, key_sha256):
     """Read a fully written local receipt, including the three hashed proofs."""
     paths = {name: directory / f"{artifact_id}.{name}.json"
@@ -31,18 +38,21 @@ def stored_evidence(directory, artifact_id, image, commit, policy, key_sha256):
     for path in paths.values():
         if not path.is_file() or path.is_symlink() or path.stat().st_mode & 0o077:
             raise RuntimeError("Admission evidence file is missing or unsafe")
-    receipt = json.loads(paths["receipt"].read_text())
+    receipt = proof_json(paths["receipt"].read_text())
+    if not isinstance(receipt, dict):
+        raise RuntimeError("Stored admission receipt invalid")
     if (receipt.get("image"), receipt.get("source_commit"), receipt.get("policy_revision"),
             receipt.get("cosign_key_sha256")) != (image, commit, policy, key_sha256):
         raise RuntimeError("Admission replay differs from stored proof")
     proofs = {name: paths[name].read_bytes() for name in ("cosign", "trivy", "sbom")}
-    cosign = json.loads(proofs["cosign"])
+    cosign = proof_json(proofs["cosign"])
     if (not isinstance(cosign, list) or not cosign or receipt.get("signature_count") != len(cosign) or
-            any(item.get("critical", {}).get("image", {}).get("docker-manifest-digest") !=
+            any(not isinstance(item, dict) or item.get("critical", {}).get("image", {}).get("docker-manifest-digest") !=
                 image.rsplit("@", 1)[-1] for item in cosign)):
         raise RuntimeError("Stored image signature proof invalid")
-    if (not isinstance(json.loads(proofs["trivy"]), dict) or
-            json.loads(proofs["sbom"]).get("bomFormat") != "CycloneDX" or
+    sbom = proof_json(proofs["sbom"])
+    if (not isinstance(proof_json(proofs["trivy"]), dict) or
+            not isinstance(sbom, dict) or sbom.get("bomFormat") != "CycloneDX" or
             receipt.get("trivy_sha256") != hashlib.sha256(proofs["trivy"]).hexdigest() or
             receipt.get("sbom_sha256") != hashlib.sha256(proofs["sbom"]).hexdigest()):
         raise RuntimeError("Stored scan or SBOM proof invalid")
