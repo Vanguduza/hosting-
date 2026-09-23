@@ -120,7 +120,7 @@ class Handler(BaseHTTPRequestHandler):
         record(conn, org_id, actor, "application.create", app_id, request_id)
         return 201, {"id": app_id, "request_id": request_id}
 
-    def releases(self, conn, org_id, app_id, actor, body, method, request_id):
+    def releases(self, conn, org_id, app_id, actor, body, method, request_id, rollback_of=None):
         role = self.membership(conn, org_id, actor)
         if not allowed(role, "release:read" if method == "GET" else "release:create"):
             return 404, {"error": "not_found"}
@@ -130,7 +130,7 @@ class Handler(BaseHTTPRequestHandler):
             return 404, {"error": "not_found"}
         if method == "GET":
             rows = conn.execute(
-                "SELECT id,image,state,node_id,created_at FROM hosting.releases "
+                "SELECT id,image,state,node_id,previous_release_id,rollback_of_release_id,created_at FROM hosting.releases "
                 "WHERE organization_id=%s AND application_id=%s ORDER BY created_at DESC LIMIT 100",
                 (org_id, app_id),
             ).fetchall()
@@ -140,12 +140,13 @@ class Handler(BaseHTTPRequestHandler):
         conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 1))", (str(app_id),))
         app = conn.execute("SELECT active_release_id FROM hosting.applications WHERE id=%s", (app_id,)).fetchone()
         existing = conn.execute(
-            "SELECT id,state,image,port,health_path,memory_mb,cpu_milli FROM hosting.releases "
+            "SELECT id,state,image,port,health_path,memory_mb,cpu_milli,rollback_of_release_id FROM hosting.releases "
             "WHERE organization_id=%s AND application_id=%s AND idempotency_key=%s",
             (org_id, app_id, body["idempotency_key"]),
         ).fetchone()
         if existing:
-            if any(existing[key] != body[key] for key in ("image", "port", "health_path", "memory_mb", "cpu_milli")):
+            if (any(existing[key] != body[key] for key in ("image", "port", "health_path", "memory_mb", "cpu_milli")) or
+                    existing["rollback_of_release_id"] != rollback_of):
                 return 409, {"error": "idempotency_conflict"}
             return 200, {"id": existing["id"], "state": existing["state"], "replayed": True}
         pending = conn.execute("SELECT 1 FROM hosting.releases WHERE application_id=%s AND state IN ('QUEUED','DEPLOYING')",
@@ -175,15 +176,42 @@ class Handler(BaseHTTPRequestHandler):
         release_id, job_id = uuid.uuid4(), uuid.uuid4()
         conn.execute(
             "INSERT INTO hosting.releases(id,organization_id,application_id,node_id,requested_by,idempotency_key,"
-            "image,port,health_path,memory_mb,cpu_milli,previous_release_id) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            "image,port,health_path,memory_mb,cpu_milli,previous_release_id,rollback_of_release_id) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
             (release_id, org_id, app_id, node["id"], actor, body["idempotency_key"], body["image"],
-             body["port"], body["health_path"], body["memory_mb"], body["cpu_milli"], app["active_release_id"]),
+             body["port"], body["health_path"], body["memory_mb"], body["cpu_milli"], app["active_release_id"], rollback_of),
         )
         conn.execute("INSERT INTO hosting.jobs(id,organization_id,release_id) VALUES (%s,%s,%s)",
                      (job_id, org_id, release_id))
-        record(conn, org_id, actor, "release.queue", release_id, request_id)
-        return 202, {"id": release_id, "job_id": job_id, "state": "QUEUED", "request_id": request_id}
+        record(conn, org_id, actor, "release.rollback_queue" if rollback_of else "release.queue", release_id, request_id)
+        return 202, {"id": release_id, "job_id": job_id, "state": "QUEUED", "request_id": request_id,
+                     "rollback_of_release_id": rollback_of}
+
+    def rollback(self, conn, org_id, app_id, actor, body, request_id):
+        if not allowed(self.membership(conn, org_id, actor), "release:rollback"):
+            return 404, {"error": "not_found"}
+        if set(body) != {"target_release_id", "idempotency_key"}:
+            return 400, {"error": "invalid_rollback"}
+        try:
+            target_id = uuid.UUID(body["target_release_id"])
+            if str(target_id) != body["target_release_id"]:
+                raise ValueError()
+            if str(uuid.UUID(body["idempotency_key"])) != body["idempotency_key"]:
+                raise ValueError()
+        except (ValueError, TypeError, AttributeError):
+            return 400, {"error": "invalid_rollback"}
+        target = conn.execute("SELECT id,image,port,health_path,memory_mb,cpu_milli,state "
+                              "FROM hosting.releases WHERE organization_id=%s AND application_id=%s AND id=%s",
+                              (org_id, app_id, target_id)).fetchone()
+        if not target or target["state"] not in ("HEALTHY_PRIVATE", "SUPERSEDED", "RETIRED"):
+            return 409, {"error": "rollback_target_unavailable"}
+        active = conn.execute("SELECT active_release_id FROM hosting.applications WHERE organization_id=%s AND id=%s",
+                              (org_id, app_id)).fetchone()
+        if active and active["active_release_id"] == target_id:
+            return 409, {"error": "target_already_active"}
+        request = {"idempotency_key": body["idempotency_key"], "image": target["image"], "port": target["port"],
+                   "health_path": target["health_path"], "memory_mb": target["memory_mb"], "cpu_milli": target["cpu_milli"]}
+        return self.releases(conn, org_id, app_id, actor, request, "POST", request_id, rollback_of=target_id)
 
     def handle_request(self, method):
         path = urlsplit(self.path).path
@@ -247,6 +275,9 @@ class Handler(BaseHTTPRequestHandler):
                     elif match := re.fullmatch(r"/v1/organizations/([0-9a-f-]{36})/applications/([0-9a-f-]{36})/releases", path):
                         result = self.releases(conn, uuid.UUID(match.group(1)), uuid.UUID(match.group(2)),
                                                actor, body, method, request_id)
+                    elif method == "POST" and (match := re.fullmatch(r"/v1/organizations/([0-9a-f-]{36})/applications/([0-9a-f-]{36})/rollback", path)):
+                        result = self.rollback(conn, uuid.UUID(match.group(1)), uuid.UUID(match.group(2)),
+                                               actor, body, request_id)
                     else:
                         result = (404, {"error": "not_found"})
             return self.reply(*result)

@@ -4,7 +4,7 @@ This repository binds the DIAL hosting blueprint to source control and contains 
 
 ## Current certification
 
-`BUILD_READY=false`, `RUNTIME_QUALIFIED=false`, `PRODUCTION_QUALIFIED=false`. The repository contains authenticated tenant/project/application APIs; a trusted-source build, scan, sign and digest admission command; private release scheduling and an mTLS Docker node agent; a durable worker with idempotent private health receipts and delayed old-release retirement; control-database backup and isolated restore drill tooling. Public ingress, GitHub webhook automation, managed Supabase, hosted client data backups, billing, secrets, provider IAM setup and the client portal have **not** been implemented or certified. A missing capability is omitted rather than represented by a fake route or green status.
+`BUILD_READY=false`, `RUNTIME_QUALIFIED=false`, `PRODUCTION_QUALIFIED=false`. The repository contains authenticated tenant/project/application APIs; a trusted-source build, scan, sign and digest admission command; private release scheduling and an mTLS Docker node agent; immutable rollback by creating a new release from an admitted digest; a durable worker with idempotent private health receipts and delayed old-release retirement; control-database backup and isolated restore drill tooling. Public ingress, GitHub webhook automation, managed Supabase, hosted client data backups, billing, secrets, provider IAM setup and the client portal have **not** been implemented or certified. A missing capability is omitted rather than represented by a fake route or green status.
 
 ## Local control-plane verification
 

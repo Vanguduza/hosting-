@@ -115,6 +115,25 @@ class DatabaseIntegration(unittest.TestCase):
             self.assertEqual((reservations["reserved_cpu_milli"], reservations["reserved_memory_mb"]), (100, 128))
         with psycopg.connect(self.api, row_factory=dict_row) as conn:
             with conn.transaction():
+                conn.execute("SELECT set_config('hosting.actor_sub','alice',true)")
+                status, rollback = handler.rollback(conn, self.org_a, app_id, "alice",
+                                                    {"target_release_id": str(release["id"]),
+                                                     "idempotency_key": str(uuid.uuid4())}, uuid.uuid4())
+                self.assertEqual(status, 202)
+                self.assertEqual(rollback["rollback_of_release_id"], release["id"])
+                self.assertNotEqual(rollback["id"], release["id"])
+        with psycopg.connect(self.worker, row_factory=dict_row, autocommit=True) as conn:
+            job, selected, node, attempt = claim(conn)
+            self.assertEqual(selected["id"], rollback["id"])
+            self.assertEqual(selected["image"], self.image)
+            self.assertEqual(selected["rollback_of_release_id"], release["id"])
+            self.assertTrue(finalize(conn, job, selected, attempt,
+                                     receipt={"operation_id": str(job["id"]),
+                                              "release_id": str(rollback["id"]), "state": "HEALTHY_PRIVATE"}))
+        with psycopg.connect(self.admin, row_factory=dict_row) as conn:
+            self.assertEqual(conn.execute("SELECT active_release_id FROM hosting.applications WHERE id=%s", (app_id,)).fetchone()["active_release_id"], rollback["id"])
+        with psycopg.connect(self.api, row_factory=dict_row) as conn:
+            with conn.transaction():
                 conn.execute("SELECT set_config('hosting.actor_sub','bob',true)")
                 self.assertEqual(conn.execute("SELECT id FROM hosting.applications WHERE organization_id=%s",
                                               (self.org_a,)).fetchall(), [])

@@ -47,11 +47,16 @@ CREATE TABLE hosting.releases (
   cpu_milli integer NOT NULL CHECK (cpu_milli BETWEEN 50 AND 32000),
   state text NOT NULL DEFAULT 'QUEUED' CHECK (state IN ('QUEUED','DEPLOYING','HEALTHY_PRIVATE','SUPERSEDED','RETIRED','FAILED')),
   previous_release_id uuid,
+  rollback_of_release_id uuid,
   created_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (organization_id,id),
+  UNIQUE (organization_id,application_id,id),
   UNIQUE (organization_id,application_id,idempotency_key),
   FOREIGN KEY (organization_id,application_id) REFERENCES hosting.applications(organization_id,id)
 );
+ALTER TABLE hosting.releases ADD CONSTRAINT rollback_target_fk
+  FOREIGN KEY (organization_id,application_id,rollback_of_release_id)
+  REFERENCES hosting.releases(organization_id,application_id,id);
 CREATE UNIQUE INDEX releases_one_pending_per_app ON hosting.releases(application_id)
   WHERE state IN ('QUEUED','DEPLOYING');
 ALTER TABLE hosting.applications ADD CONSTRAINT active_release_fk
