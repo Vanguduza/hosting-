@@ -21,7 +21,7 @@ def docker(*args):
     result = subprocess.run(["docker", *args], capture_output=True, text=True, timeout=120)
     if result.returncode:
         raise RuntimeError("Docker failed: " + " ".join(args[:3]) + ": " + result.stderr[-1000:])
-    return result.stdout
+    return result.stdout + result.stderr if args[0] == "logs" else result.stdout
 
 
 @unittest.skipUnless(os.environ.get("INGRESS_TEST_IMAGE") and os.environ.get("NODE_RUNTIME_TEST_IMAGE"),
@@ -55,6 +55,7 @@ class IngressRuntime(unittest.TestCase):
                        "-p", f"127.0.0.1:{port}:443", "-v", str(root) + ":/routes:ro",
                        os.environ["INGRESS_TEST_IMAGE"],
                        "--providers.file.directory=/routes", "--providers.file.watch=true",
+                       "--log.level=DEBUG",
                        "--entrypoints.web.address=:80", "--entrypoints.websecure.address=:443",
                        "--certificatesresolvers.acme.acme.email=ci@example.org",
                        "--certificatesresolvers.acme.acme.storage=/tmp/acme.json",
