@@ -313,8 +313,9 @@ class Handler(BaseHTTPRequestHandler):
                                (app_id,)).fetchone()
         if pending:
             return 409, {"error": "release_in_progress"}
-        admitted = conn.execute("SELECT 1 FROM hosting.artifact_admissions WHERE image=%s", (body["image"],)).fetchone()
-        if not admitted:
+        admitted = conn.execute("SELECT hosting.release_image_admitted(%s,%s,%s) AS allowed",
+                                (body["image"], org_id, app_id)).fetchone()
+        if not admitted["allowed"]:
             return 409, {"error": "artifact_not_admitted"}
         previous_node = None
         if app["active_release_id"]:

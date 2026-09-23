@@ -492,6 +492,33 @@ class DatabaseIntegration(unittest.TestCase):
                 conn.execute("SELECT set_config('hosting.actor_sub','alice',true)")
                 status, listing = handler.builds(conn, self.org_a, app, "alice", "GET")
                 self.assertEqual((status, listing["builds"][0]["image"]), (200, image))
+        other_app = uuid.uuid4()
+        with psycopg.connect(self.admin) as conn:
+            conn.execute("INSERT INTO hosting.applications(id,organization_id,project_id,environment,name) "
+                         "VALUES (%s,%s,%s,'ci','foreign-build')", (other_app, self.org_b, self.project_b))
+            for org, target, hostname in ((self.org_a, app, "gitweb.example.org"),
+                                          (self.org_b, other_app, "foreign-build.example.org")):
+                conn.execute("INSERT INTO hosting.domains(organization_id,application_id,hostname,"
+                             "verification_token,verified_at) VALUES (%s,%s,%s,%s,now())",
+                             (org, target, hostname, "z" * 43))
+        body = {"idempotency_key": str(uuid.uuid4()), "image": image, "port": 8080,
+                "health_path": "/health", "memory_mb": 128, "cpu_milli": 100}
+        with psycopg.connect(self.api, row_factory=dict_row) as conn:
+            with conn.transaction():
+                conn.execute("SELECT set_config('hosting.actor_sub','bob',true)")
+                self.assertEqual(handler.releases(conn, self.org_b, other_app, "bob", body,
+                                                  "POST", uuid.uuid4()),
+                                 (409, {"error": "artifact_not_admitted"}))
+                self.assertFalse(conn.execute("SELECT hosting.release_image_admitted(%s,%s,%s)",
+                                              (image, self.org_b, other_app)).fetchone()[0])
+            with conn.transaction():
+                conn.execute("SELECT set_config('hosting.actor_sub','alice',true)")
+                self.assertTrue(conn.execute("SELECT hosting.release_image_admitted(%s,%s,%s)",
+                                             (image, self.org_a, app)).fetchone()[0])
+                self.assertTrue(conn.execute("SELECT hosting.release_image_admitted(%s,%s,%s)",
+                                             (self.image, self.org_a, app)).fetchone()[0])
+                self.assertEqual(handler.releases(conn, self.org_a, app, "alice", body,
+                                                  "POST", uuid.uuid4())[0], 202)
 
 
 if __name__ == "__main__":

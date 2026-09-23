@@ -20,6 +20,7 @@ services:
       - ../../services/api/schema/008_admission.sql:/docker-entrypoint-initdb.d/08_admission.sql:ro
       - ../../services/api/schema/009_github_builds.sql:/docker-entrypoint-initdb.d/09_github_builds.sql:ro
       - ../../services/api/schema/010_build_visibility.sql:/docker-entrypoint-initdb.d/10_build_visibility.sql:ro
+      - ../../services/api/schema/011_build_release_ownership.sql:/docker-entrypoint-initdb.d/11_build_release_ownership.sql:ro
     healthcheck:
       test: [CMD-SHELL, 'pg_isready -U postgres -d hosting']
       interval: 10s
