@@ -38,20 +38,22 @@ class OpenBaoIntegration(unittest.TestCase):
                 deadline = time.monotonic() + 60
                 while True:
                     try:
+                        shutil.rmtree(root / "certs", ignore_errors=True)
                         docker("cp", name + ":/tmp", str(root / "certs"))
-                        break
+                        candidates = [path for path in (root / "certs").rglob("*") if path.is_file()
+                                      and b"BEGIN CERTIFICATE" in path.read_bytes() and "ca" in path.name.lower()]
+                        if candidates:
+                            break
                     except RuntimeError:
                         status = docker("inspect", "-f", "{{.State.Status}}", name).strip()
                         if status == "exited":
                             logs = docker("logs", name).replace("disposable-ci-root", "[redacted]")
                             raise RuntimeError("OpenBao dev server exited: " + logs[-2500:]) from None
-                        if time.monotonic() > deadline:
-                            logs = docker("logs", name).replace("disposable-ci-root", "[redacted]")
-                            raise RuntimeError("OpenBao dev certificate directory absent: " + logs[-2500:]) from None
-                        time.sleep(1)
-                candidates = [path for path in (root / "certs").rglob("*") if path.is_file()
-                              and b"BEGIN CERTIFICATE" in path.read_bytes() and "ca" in path.name.lower()]
-                self.assertTrue(candidates, "OpenBao did not produce a development CA")
+                    if time.monotonic() > deadline:
+                        logs = docker("logs", name).replace("disposable-ci-root", "[redacted]")
+                        filenames = [p.name for p in (root / "certs").rglob("*") if p.is_file()]
+                        raise RuntimeError("OpenBao CA unavailable; files=" + repr(filenames) + " logs=" + logs[-1000:])
+                    time.sleep(1)
                 import ssl
                 context = ssl.create_default_context(cafile=str(candidates[0]))
                 address = "https://127.0.0.1:18200"
