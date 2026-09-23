@@ -2,9 +2,9 @@ import re
 
 
 PERMISSIONS = {
-    "owner": frozenset({"project:read", "project:create", "application:read", "application:create", "release:create", "release:read", "release:rollback"}),
-    "admin": frozenset({"project:read", "project:create", "application:read", "application:create", "release:create", "release:read", "release:rollback"}),
-    "viewer": frozenset({"project:read", "application:read", "release:read"}),
+    "owner": frozenset({"project:read", "project:create", "application:read", "application:create", "release:create", "release:read", "release:rollback", "domain:read", "domain:create", "domain:verify"}),
+    "admin": frozenset({"project:read", "project:create", "application:read", "application:create", "release:create", "release:read", "release:rollback", "domain:read", "domain:create", "domain:verify"}),
+    "viewer": frozenset({"project:read", "application:read", "release:read", "domain:read"}),
 }
 
 

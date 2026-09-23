@@ -11,6 +11,7 @@ from psycopg.conninfo import make_conninfo
 from psycopg.rows import dict_row
 
 from .policy import allowed, valid_name, valid_release
+from .domains import new_token, txt_proves, valid_hostname
 
 
 def environment():
@@ -97,6 +98,52 @@ class Handler(BaseHTTPRequestHandler):
         ).fetchone()
         return row["role"] if row else None
 
+    def domains(self, conn, org_id, app_id, actor, body, method, request_id, verify=False):
+        if verify and method != "POST":
+            return 404, {"error": "not_found"}
+        action = "domain:verify" if verify else ("domain:read" if method == "GET" else "domain:create")
+        if not allowed(self.membership(conn, org_id, actor), action):
+            return 404, {"error": "not_found"}
+        app = conn.execute("SELECT id FROM hosting.applications WHERE organization_id=%s AND id=%s",
+                           (org_id, app_id)).fetchone()
+        if not app:
+            return 404, {"error": "not_found"}
+        current = conn.execute("SELECT id,hostname,verification_token,verified_at,challenge_expires_at "
+                               "FROM hosting.domains WHERE organization_id=%s AND application_id=%s",
+                               (org_id, app_id)).fetchone()
+        if method == "GET":
+            if not current:
+                return 200, {"domain": None}
+            result = {key: current[key] for key in ("id", "hostname", "verified_at", "challenge_expires_at")}
+            if allowed(self.membership(conn, org_id, actor), "domain:verify") and not current["verified_at"]:
+                result["txt_name"] = "_dial-verify." + current["hostname"]
+                result["txt_value"] = "dial-hosting=" + current["verification_token"]
+            return 200, {"domain": result}
+        if verify:
+            if body or not current:
+                return 400, {"error": "invalid_domain_verification"}
+            if current["verified_at"]:
+                return 200, {"id": current["id"], "verified_at": current["verified_at"]}
+            if not conn.execute("SELECT 1 WHERE %s > now()", (current["challenge_expires_at"],)).fetchone():
+                return 409, {"error": "domain_challenge_expired"}
+            if not txt_proves(current["hostname"], current["verification_token"]):
+                return 409, {"error": "domain_dns_proof_missing"}
+            verified = conn.execute("UPDATE hosting.domains SET verified_at=now() WHERE id=%s RETURNING verified_at",
+                                    (current["id"],)).fetchone()
+            record(conn, org_id, actor, "domain.verify", current["id"], request_id)
+            return 200, {"id": current["id"], "verified_at": verified["verified_at"]}
+        if set(body) != {"hostname"} or not valid_hostname(body["hostname"]):
+            return 400, {"error": "invalid_hostname"}
+        if current:
+            return 409, {"error": "domain_already_registered"}
+        domain_id, token = uuid.uuid4(), new_token()
+        conn.execute("INSERT INTO hosting.domains(id,organization_id,application_id,hostname,verification_token) "
+                     "VALUES (%s,%s,%s,%s,%s)", (domain_id, org_id, app_id, body["hostname"], token))
+        record(conn, org_id, actor, "domain.register", domain_id, request_id)
+        return 201, {"id": domain_id, "hostname": body["hostname"],
+                     "txt_name": "_dial-verify." + body["hostname"], "txt_value": "dial-hosting=" + token,
+                     "request_id": request_id}
+
     def applications(self, conn, org_id, project_id, actor, body, method, request_id):
         role = self.membership(conn, org_id, actor)
         if not allowed(role, "application:read" if method == "GET" else "application:create"):
@@ -137,6 +184,10 @@ class Handler(BaseHTTPRequestHandler):
             return 200, {"releases": rows}
         if not valid_release(body):
             return 400, {"error": "invalid_release"}
+        domain = conn.execute("SELECT id FROM hosting.domains WHERE organization_id=%s AND application_id=%s "
+                              "AND verified_at IS NOT NULL", (org_id, app_id)).fetchone()
+        if not domain:
+            return 409, {"error": "verified_domain_required"}
         conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 1))", (str(app_id),))
         app = conn.execute("SELECT active_release_id FROM hosting.applications WHERE id=%s", (app_id,)).fetchone()
         existing = conn.execute(
@@ -162,7 +213,8 @@ class Handler(BaseHTTPRequestHandler):
                                     (app["active_release_id"],)).fetchone()
             previous_node = previous["node_id"]
         node = conn.execute(
-            "SELECT id FROM hosting.nodes WHERE enabled AND observed_at > now() - interval '5 minutes' "
+            "SELECT id FROM hosting.nodes WHERE enabled AND public_ipv4 IS NOT NULL "
+            "AND observed_at > now() - interval '5 minutes' "
             "AND cpu_milli-reserved_cpu_milli >= %s AND memory_mb-reserved_memory_mb >= %s "
             "AND (%s::uuid IS NULL OR id=%s::uuid) "
             "ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1",
@@ -203,7 +255,7 @@ class Handler(BaseHTTPRequestHandler):
         target = conn.execute("SELECT id,image,port,health_path,memory_mb,cpu_milli,state "
                               "FROM hosting.releases WHERE organization_id=%s AND application_id=%s AND id=%s",
                               (org_id, app_id, target_id)).fetchone()
-        if not target or target["state"] not in ("HEALTHY_PRIVATE", "SUPERSEDED", "RETIRED"):
+        if not target or target["state"] not in ("SERVING", "SUPERSEDED", "RETIRED"):
             return 409, {"error": "rollback_target_unavailable"}
         active = conn.execute("SELECT active_release_id FROM hosting.applications WHERE organization_id=%s AND id=%s",
                               (org_id, app_id)).fetchone()
@@ -272,6 +324,9 @@ class Handler(BaseHTTPRequestHandler):
                     elif match := re.fullmatch(r"/v1/organizations/([0-9a-f-]{36})/projects/([0-9a-f-]{36})/applications", path):
                         result = self.applications(conn, uuid.UUID(match.group(1)), uuid.UUID(match.group(2)),
                                                    actor, body, method, request_id)
+                    elif match := re.fullmatch(r"/v1/organizations/([0-9a-f-]{36})/applications/([0-9a-f-]{36})/domain(/verify)?", path):
+                        result = self.domains(conn, uuid.UUID(match.group(1)), uuid.UUID(match.group(2)),
+                                              actor, body, method, request_id, verify=bool(match.group(3)))
                     elif match := re.fullmatch(r"/v1/organizations/([0-9a-f-]{36})/applications/([0-9a-f-]{36})/releases", path):
                         result = self.releases(conn, uuid.UUID(match.group(1)), uuid.UUID(match.group(2)),
                                                actor, body, method, request_id)

@@ -4,6 +4,7 @@ import ipaddress
 import json
 import os
 import ssl
+import socket
 import time
 import uuid
 from urllib.parse import urlsplit
@@ -12,6 +13,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from .__main__ import database_dsn, record
+from .domains import address_proves, txt_proves
 
 
 PRIVATE_RANGES = [ipaddress.ip_network(cidr) for cidr in
@@ -51,6 +53,78 @@ def node_request(node, data, certificate):
         return receipt
     finally:
         connection.close()
+
+
+def route_request(node, data, certificate, remove=False):
+    parsed = private_endpoint(node)
+    context = ssl.create_default_context(cafile=certificate["ca"])
+    context.load_cert_chain(certificate["cert"], certificate["key"])
+    connection = http.client.HTTPSConnection(parsed.hostname, parsed.port, context=context, timeout=15)
+    try:
+        path = (f"/v1/routes/{data['application_id']}/{data['release_id']}" if remove else "/v1/routes")
+        connection.request("DELETE" if remove else "PUT", path,
+                           body=None if remove else json.dumps(data, separators=(",", ":")),
+                           headers={} if remove else {"Content-Type": "application/json"})
+        response = connection.getresponse()
+        receipt = json.loads(response.read(4096))
+        if response.status != 200 or receipt.get("release_id") != data["release_id"] or \
+                receipt.get("state") != ("UNROUTED" if remove else "ROUTED"):
+            raise RuntimeError("Node route operation was not proven")
+        return receipt
+    finally:
+        connection.close()
+
+
+def public_probe(host, address, release, path):
+    """Connect to the registered node address while verifying the hostname certificate."""
+    context = ssl.create_default_context()
+    with socket.create_connection((str(address), 443), timeout=5) as raw:
+        with context.wrap_socket(raw, server_hostname=host) as tls:
+            tls.settimeout(5)
+            request = f"GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nUser-Agent: DialHostingHealth/1\r\n\r\n"
+            tls.sendall(request.encode("ascii"))
+            response = http.client.HTTPResponse(tls)
+            response.begin()
+            response.read(1024)
+            return 200 <= response.status < 300 and response.getheader("X-Dial-Release") == str(release)
+
+
+def restore_route(node, release, domain, certificate):
+    payload = {"application_id": str(release["application_id"]), "release_id": str(release["id"]),
+               "hostname": domain["hostname"], "port": release["port"], "health_path": release["health_path"]}
+    if release["previous_release_id"]:
+        old = {**payload, "release_id": str(release["previous_release_id"]),
+               "port": release["previous_port"], "health_path": release["previous_health_path"]}
+        route_request(node, old, certificate)
+    else:
+        route_request(node, payload, certificate, remove=True)
+
+
+def publish(node, release, domain, certificate, probe_seconds=120):
+    if not domain or not domain["verified_at"] or not node["public_ipv4"]:
+        raise RuntimeError("Domain or public ingress unavailable")
+    if not txt_proves(domain["hostname"], domain["verification_token"]):
+        raise RuntimeError("Domain ownership proof no longer exists")
+    if not address_proves(domain["hostname"], node["public_ipv4"]):
+        raise RuntimeError("DNS does not target the selected ingress node")
+    payload = {"application_id": str(release["application_id"]), "release_id": str(release["id"]),
+               "hostname": domain["hostname"], "port": release["port"], "health_path": release["health_path"]}
+    route_request(node, payload, certificate)
+    try:
+        deadline = time.monotonic() + probe_seconds
+        while True:
+            try:
+                if public_probe(domain["hostname"], node["public_ipv4"], release["id"], release["health_path"]):
+                    break
+            except (OSError, ssl.SSLError, http.client.HTTPException):
+                pass  # Initial certificate issuance and proxy reload can take time.
+            if time.monotonic() >= deadline:
+                raise RuntimeError("Public HTTPS release proof failed")
+            time.sleep(3)
+    except Exception:
+        restore_route(node, release, domain, certificate)
+        raise
+    return {"release_id": str(release["id"]), "hostname": domain["hostname"], "state": "SERVING"}
 
 
 def node_capacity(node, certificate):
@@ -142,6 +216,9 @@ def claim(conn):
 
 
 def finalize(conn, job, release, attempt, receipt=None, failure=None):
+    if receipt and (receipt.get("public", {}).get("release_id") != str(release["id"]) or
+                    receipt["public"].get("state") != "SERVING"):
+        raise ValueError("Public release proof required for promotion")
     with conn.transaction():
         current = conn.execute("SELECT state,attempts FROM hosting.jobs WHERE id=%s FOR UPDATE", (job["id"],)).fetchone()
         if current["state"] != "RUNNING" or current["attempts"] != attempt:
@@ -150,14 +227,14 @@ def finalize(conn, job, release, attempt, receipt=None, failure=None):
             conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,1))", (str(release["application_id"]),))
             conn.execute("UPDATE hosting.applications SET active_release_id=%s WHERE id=%s",
                          (release["id"], release["application_id"]))
-            conn.execute("UPDATE hosting.releases SET state='HEALTHY_PRIVATE' WHERE id=%s", (release["id"],))
+            conn.execute("UPDATE hosting.releases SET state='SERVING' WHERE id=%s", (release["id"],))
             conn.execute("UPDATE hosting.jobs SET state='COMPLETE',lease_until=NULL,receipt=%s::jsonb WHERE id=%s",
                          (json.dumps(receipt), job["id"]))
             if release["previous_release_id"]:
-                conn.execute("UPDATE hosting.releases SET state='SUPERSEDED' WHERE id=%s AND state='HEALTHY_PRIVATE'",
+                conn.execute("UPDATE hosting.releases SET state='SUPERSEDED' WHERE id=%s AND state='SERVING'",
                              (release["previous_release_id"],))
             conn.execute("SELECT set_config('hosting.actor_sub',%s,true)", (release["requested_by"],))
-            record(conn, release["organization_id"], release["requested_by"], "release.private_healthy",
+            record(conn, release["organization_id"], release["requested_by"], "release.serving",
                    release["id"], uuid.uuid4())
         elif attempt < 3:
             delay = attempt * 15
@@ -215,7 +292,17 @@ def process_once(conn, certificate):
                "cpu_milli": release["cpu_milli"]}
     try:
         receipt = node_request(node, payload, certificate)
-        finalize(conn, job, release, attempt, receipt=receipt)
+        domain = conn.execute("SELECT hostname,verification_token,verified_at FROM hosting.domains "
+                              "WHERE application_id=%s", (release["application_id"],)).fetchone()
+        if release["previous_release_id"]:
+            previous = conn.execute("SELECT port,health_path FROM hosting.releases WHERE id=%s",
+                                    (release["previous_release_id"],)).fetchone()
+            release = {**release, "previous_port": previous["port"],
+                       "previous_health_path": previous["health_path"]}
+        receipt["public"] = publish(node, release, domain, certificate)
+        if not finalize(conn, job, release, attempt, receipt=receipt):
+            restore_route(node, release, domain, certificate)
+            raise RuntimeError("Stale deployment lease after public route activation")
     except Exception as exc:
         finalize(conn, job, release, attempt, failure=type(exc).__name__)
     return True

@@ -51,7 +51,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_PUT(self):
         if not self.authorized():
             return self.reply(403, {"error": "forbidden"})
-        if urlsplit(self.path).path != "/v1/deployments":
+        if urlsplit(self.path).path not in ("/v1/deployments", "/v1/routes"):
             return self.reply(404, {"error": "not_found"})
         try:
             size = int(self.headers.get("Content-Length", "0"))
@@ -60,7 +60,8 @@ class Handler(BaseHTTPRequestHandler):
             data = json.loads(self.rfile.read(size))
             if not isinstance(data, dict):
                 raise ValueError()
-            receipt = self.server.node.deploy(data)
+            receipt = (self.server.node.deploy(data) if urlsplit(self.path).path == "/v1/deployments"
+                       else self.server.node.route(data))
             return self.reply(200, receipt)
         except (ValueError, json.JSONDecodeError):
             return self.reply(400, {"error": "invalid_request"})
@@ -73,6 +74,14 @@ class Handler(BaseHTTPRequestHandler):
         if not self.authorized():
             return self.reply(403, {"error": "forbidden"})
         path = urlsplit(self.path).path
+        route = __import__("re").fullmatch(r"/v1/routes/([0-9a-f-]{36})/([0-9a-f-]{36})", path)
+        if route:
+            try:
+                return self.reply(200, self.server.node.unroute(*route.groups()))
+            except ValueError:
+                return self.reply(400, {"error": "invalid_id"})
+            except OperationError:
+                return self.reply(409, {"error": "route_conflict"})
         prefix = "/v1/applications/"
         if not path.startswith(prefix) or "/releases/" not in path:
             return self.reply(404, {"error": "not_found"})
@@ -102,7 +111,7 @@ def main():
     context.load_cert_chain(os.environ["NODE_CERT_FILE"], os.environ["NODE_KEY_FILE"])
     server = ThreadingHTTPServer((os.environ["NODE_BIND"], int(os.environ["NODE_PORT"])), Handler)
     server.socket = context.wrap_socket(server.socket, server_side=True)
-    server.node = Node(os.environ["NODE_STATE_FILE"])
+    server.node = Node(os.environ["NODE_STATE_FILE"], routes_dir=os.environ.get("NODE_ROUTES_DIR"))
     server.client_cn = os.environ["NODE_CLIENT_CN"]
     server.serve_forever()
 

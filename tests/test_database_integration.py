@@ -35,6 +35,7 @@ class DatabaseIntegration(unittest.TestCase):
                 conn.execute("INSERT INTO hosting.projects(id,organization_id,name) VALUES (%s,%s,%s)", (project, org, actor))
             conn.execute("INSERT INTO hosting.nodes(id,endpoint,server_name,enabled,cpu_milli,memory_mb,observed_at) "
                          "VALUES (%s,'https://10.0.0.2:8443','10.0.0.2',true,2000,4096,now())", (cls.node,))
+            conn.execute("UPDATE hosting.nodes SET public_ipv4='8.8.8.8' WHERE id=%s", (cls.node,))
             conn.execute("INSERT INTO hosting.artifact_admissions(image,sbom_sha256,source_commit,policy_revision,verification_receipt) "
                          "VALUES (%s,%s,%s,'test-policy','{}'::jsonb)", (cls.image, "b" * 64, "c" * 40))
 
@@ -50,6 +51,13 @@ class DatabaseIntegration(unittest.TestCase):
                                                     {"name": "web", "environment": "production"}, "POST", uuid.uuid4())
                 self.assertEqual(status, 201)
                 app_id = app["id"]
+                status, domain = handler.domains(conn, self.org_a, app_id, "alice",
+                                                 {"hostname": "web.example.org"}, "POST", uuid.uuid4())
+                self.assertEqual(status, 201)
+                self.assertEqual(handler.domains(conn, self.org_b, app_id, "alice", {}, "GET", uuid.uuid4())[0], 404)
+                with patch("hosting_api.__main__.txt_proves", return_value=True):
+                    self.assertEqual(handler.domains(conn, self.org_a, app_id, "alice", {},
+                                                     "POST", uuid.uuid4(), verify=True)[0], 200)
                 body = {"idempotency_key": str(uuid.uuid4()), "image": self.image, "port": 8080,
                         "health_path": "/health", "cpu_milli": 100, "memory_mb": 128}
                 status, release = handler.releases(conn, self.org_a, app_id, "alice", body, "POST", uuid.uuid4())
@@ -66,14 +74,15 @@ class DatabaseIntegration(unittest.TestCase):
             self.assertEqual(node["id"], self.node)
             self.assertTrue(finalize(conn, job, selected_release, attempt,
                                      receipt={"operation_id": str(job["id"]),
-                                              "release_id": str(release["id"]), "state": "HEALTHY_PRIVATE"}))
+                                              "release_id": str(release["id"]), "state": "HEALTHY_PRIVATE",
+                                              "public": {"release_id": str(release["id"]), "state": "SERVING"}}))
         with psycopg.connect(self.admin, row_factory=dict_row) as conn:
             active = conn.execute("SELECT active_release_id FROM hosting.applications WHERE id=%s", (app_id,)).fetchone()
             self.assertEqual(active["active_release_id"], release["id"])
             row = conn.execute("SELECT state FROM hosting.releases WHERE id=%s", (release["id"],)).fetchone()
-            self.assertEqual(row["state"], "HEALTHY_PRIVATE")
+            self.assertEqual(row["state"], "SERVING")
             self.assertEqual(conn.execute("SELECT count(*) FROM hosting.audit_events WHERE organization_id=%s",
-                                          (self.org_a,)).fetchone()["count"], 3)
+                                          (self.org_a,)).fetchone()["count"], 5)
         with psycopg.connect(self.api, row_factory=dict_row) as conn:
             with conn.transaction():
                 conn.execute("SELECT set_config('hosting.actor_sub','alice',true)")
@@ -104,7 +113,8 @@ class DatabaseIntegration(unittest.TestCase):
             job, selected, node, attempt = claim(conn)
             self.assertEqual(selected["id"], promoted["id"])
             self.assertTrue(finalize(conn, job, selected, attempt,
-                                     receipt={"operation_id": str(job["id"]), "release_id": str(promoted["id"]), "state": "HEALTHY_PRIVATE"}))
+                                     receipt={"operation_id": str(job["id"]), "release_id": str(promoted["id"]),
+                                              "state": "HEALTHY_PRIVATE", "public": {"release_id": str(promoted["id"]), "state": "SERVING"}}))
             with patch("hosting_api.worker.node_retire") as retirement:
                 sweep_retirements(conn, {})
                 retirement.assert_called_once()
@@ -129,7 +139,8 @@ class DatabaseIntegration(unittest.TestCase):
             self.assertEqual(selected["rollback_of_release_id"], release["id"])
             self.assertTrue(finalize(conn, job, selected, attempt,
                                      receipt={"operation_id": str(job["id"]),
-                                              "release_id": str(rollback["id"]), "state": "HEALTHY_PRIVATE"}))
+                                              "release_id": str(rollback["id"]), "state": "HEALTHY_PRIVATE",
+                                              "public": {"release_id": str(rollback["id"]), "state": "SERVING"}}))
         with psycopg.connect(self.admin, row_factory=dict_row) as conn:
             self.assertEqual(conn.execute("SELECT active_release_id FROM hosting.applications WHERE id=%s", (app_id,)).fetchone()["active_release_id"], rollback["id"])
         with psycopg.connect(self.api, row_factory=dict_row) as conn:

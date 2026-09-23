@@ -1,10 +1,10 @@
 # DIAL Self-Hosted Client Cloud
 
-This repository binds the DIAL hosting blueprint to source control and contains the first implemented control-plane contracts. The attached [Rev 1 blueprint](development-pack/BLUEPRINT_REV_1.md) remains the requirements source; [Review Rev 2](development-pack/REVIEW_REV_2.md) records corrections and execution gates.
+This repository binds the DIAL hosting blueprint to source control and contains implemented control-plane contracts. The attached [Rev 1 blueprint](development-pack/BLUEPRINT_REV_1.md) remains the requirements source; [Review Rev 2](development-pack/REVIEW_REV_2.md) records corrections and execution gates.
 
 ## Current certification
 
-`BUILD_READY=false`, `RUNTIME_QUALIFIED=false`, `PRODUCTION_QUALIFIED=false`. The repository contains authenticated tenant/project/application APIs; a trusted-source build, scan, sign and digest admission command; private release scheduling and an mTLS Docker node agent; immutable rollback by creating a new release from an admitted digest; a durable worker with idempotent private health receipts and delayed old-release retirement; control-database backup and isolated restore drill tooling. Public ingress, GitHub webhook automation, managed Supabase, hosted client data backups, billing, secrets, provider IAM setup and the client portal have **not** been implemented or certified. A missing capability is omitted rather than represented by a fake route or green status.
+`BUILD_READY=false`, `RUNTIME_QUALIFIED=false`, `PRODUCTION_QUALIFIED=false`. The repository contains authenticated tenant/project/application APIs; a trusted-source build, scan, sign and digest admission command; private release scheduling and an mTLS Docker node agent; immutable rollback by creating a new release from an admitted digest; a durable worker with domain ownership proof, Traefik HTTPS routes, release-specific public health receipts and delayed old-release retirement; control-database backup and isolated restore drill tooling. Public ingress has code and a [deployment runbook](docs/PUBLIC_INGRESS.md), but is not live-qualified. GitHub webhook automation, managed Supabase, hosted client data backups, billing, secrets, provider IAM setup and the client portal have **not** been implemented or certified. A missing capability is omitted rather than represented by a fake route or green status.
 
 ## Local control-plane verification
 

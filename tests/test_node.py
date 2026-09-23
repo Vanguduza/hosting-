@@ -100,6 +100,34 @@ class NodeTests(unittest.TestCase):
             self.assertEqual(node.deploy(first)["state"], "HEALTHY_PRIVATE")
             self.assertEqual(len([call for call in fixture.calls if call[1] == "pull"]), previous_pulls + 1)
 
+    def test_public_route_is_atomic_and_retirement_guarded(self):
+        fixture = DockerFixture()
+        fixture.containers["dial-ingress"] = {}
+        with tempfile.TemporaryDirectory() as directory:
+            node = Node(Path(directory) / "agent.sqlite3", runner=fixture,
+                        health_probe=lambda ip, port, path: True)
+            first = request()
+            node.deploy(first)
+            route = {"application_id": first["application_id"], "release_id": first["release_id"],
+                     "hostname": "app.example.org", "port": 8080, "health_path": "/health"}
+            self.assertEqual(node.route(route)["state"], "ROUTED")
+            route_file = node.routes_dir / (first["application_id"] + ".json")
+            document = json.loads(route_file.read_text())
+            self.assertEqual(document["http"]["middlewares"]["app-" + first["application_id"] + "-receipt"]
+                             ["headers"]["customResponseHeaders"]["X-Dial-Release"], first["release_id"])
+            before = route_file.read_bytes()
+            with self.assertRaises(ValueError):
+                node.route({**route, "hostname": "evil.example.org`) || Host(`attacker.example.org"})
+            self.assertEqual(route_file.read_bytes(), before)
+            second = request(application_id=first["application_id"])
+            node.deploy(second)
+            with self.assertRaises(OperationError):
+                node.retire(first["application_id"], first["release_id"])
+            node.route({**route, "release_id": second["release_id"]})
+            self.assertEqual(node.retire(first["application_id"], first["release_id"])["state"], "RETIRED")
+            self.assertEqual(node.unroute(second["application_id"], second["release_id"])["state"], "UNROUTED")
+            self.assertFalse(route_file.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

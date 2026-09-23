@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import uuid
+import ipaddress
 from urllib.parse import urlsplit
 
 import psycopg
@@ -19,7 +20,10 @@ def main():
     parser.add_argument("--ca-file", required=True)
     parser.add_argument("--cert-file", required=True)
     parser.add_argument("--key-file", required=True)
+    parser.add_argument("--public-ipv4", required=True, help="Global IPv4 routed to ingress ports 80 and 443")
     args = parser.parse_args()
+    if not ipaddress.IPv4Address(args.public_ipv4).is_global:
+        parser.error("Public ingress address must be globally routable")
     parsed = urlsplit(args.endpoint)
     try:
         private_endpoint({"endpoint": args.endpoint, "server_name": parsed.hostname})
@@ -32,9 +36,10 @@ def main():
     capacity = node_capacity(node, {"ca": args.ca_file, "cert": args.cert_file, "key": args.key_file})
     node_id = uuid.uuid4()
     with psycopg.connect(dsn, connect_timeout=5) as conn:
-        conn.execute("INSERT INTO hosting.nodes(id,endpoint,server_name,enabled,cpu_milli,memory_mb,observed_at) "
-                     "VALUES (%s,%s,%s,true,%s,%s,now())",
-                     (node_id, args.endpoint, parsed.hostname, capacity["cpu_milli"], capacity["memory_mb"]))
+        conn.execute("INSERT INTO hosting.nodes(id,endpoint,server_name,public_ipv4,enabled,cpu_milli,memory_mb,observed_at) "
+                     "VALUES (%s,%s,%s,%s,true,%s,%s,now())",
+                     (node_id, args.endpoint, parsed.hostname, args.public_ipv4,
+                      capacity["cpu_milli"], capacity["memory_mb"]))
     print(json.dumps({"node_id": str(node_id), "capacity": capacity}))
 
 

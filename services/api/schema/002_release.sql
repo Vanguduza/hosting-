@@ -45,7 +45,7 @@ CREATE TABLE hosting.releases (
   health_path text NOT NULL CHECK (health_path ~ '^/[A-Za-z0-9/_-]{0,127}$'),
   memory_mb integer NOT NULL CHECK (memory_mb BETWEEN 64 AND 32768),
   cpu_milli integer NOT NULL CHECK (cpu_milli BETWEEN 50 AND 32000),
-  state text NOT NULL DEFAULT 'QUEUED' CHECK (state IN ('QUEUED','DEPLOYING','HEALTHY_PRIVATE','SUPERSEDED','RETIRED','FAILED')),
+  state text NOT NULL DEFAULT 'QUEUED' CHECK (state IN ('QUEUED','DEPLOYING','SERVING','SUPERSEDED','RETIRED','FAILED')),
   previous_release_id uuid,
   rollback_of_release_id uuid,
   created_at timestamptz NOT NULL DEFAULT now(),

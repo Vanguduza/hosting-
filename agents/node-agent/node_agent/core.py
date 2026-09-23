@@ -11,6 +11,7 @@ import subprocess
 import threading
 import time
 import uuid
+import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -63,14 +64,18 @@ def probe(ip, port, path, timeout=3):
 
 
 class Node:
-    def __init__(self, state_file, runner=command, health_probe=probe, network="dial-runtime"):
+    def __init__(self, state_file, runner=command, health_probe=probe, network="dial-runtime", routes_dir=None):
         self.state_file = Path(state_file)
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
         self.runner, self.health_probe, self.network = runner, health_probe, network
+        self.routes_dir = Path(routes_dir) if routes_dir else self.state_file.parent / "routes"
+        self.routes_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(self.routes_dir, 0o700)
         self.lock = threading.RLock()
         with self.db() as db:
             db.execute("CREATE TABLE IF NOT EXISTS operations (id TEXT PRIMARY KEY, input_hash TEXT NOT NULL, state TEXT NOT NULL, receipt TEXT)")
             db.execute("CREATE TABLE IF NOT EXISTS active (application_id TEXT PRIMARY KEY, release_id TEXT NOT NULL, container TEXT NOT NULL)")
+            db.execute("CREATE TABLE IF NOT EXISTS routes (application_id TEXT PRIMARY KEY, release_id TEXT NOT NULL, hostname TEXT NOT NULL)")
         os.chmod(self.state_file, 0o600)
 
     def db(self):
@@ -200,8 +205,11 @@ class Node:
         with self.lock, self.file_lock():
             with self.db() as db:
                 current = db.execute("SELECT release_id FROM active WHERE application_id=?", (app_id,)).fetchone()
+                routed = db.execute("SELECT release_id FROM routes WHERE application_id=?", (app_id,)).fetchone()
             if current and current["release_id"] == release_id:
                 raise OperationError("Cannot retire active release")
+            if routed and routed["release_id"] == release_id:
+                raise OperationError("Cannot retire publicly routed release")
             try:
                 item = json.loads(self.runner(["docker", "inspect", container], 15))[0]
             except OperationError:
@@ -211,6 +219,58 @@ class Node:
                 raise OperationError("Container ownership labels do not match")
             self.runner(["docker", "rm", "-f", container], 30)
             return {"release_id": release_id, "state": "RETIRED"}
+
+    def route(self, data):
+        """Swap one application's Traefik file atomically after checking container ownership."""
+        if set(data) != {"application_id", "release_id", "hostname", "port", "health_path"}:
+            raise ValueError("Invalid route properties")
+        app, release = str(uuid.UUID(data["application_id"])), str(uuid.UUID(data["release_id"]))
+        from .routing import route_document, valid_hostname
+        if app != data["application_id"] or release != data["release_id"] or not valid_hostname(data["hostname"]):
+            raise ValueError("Invalid route identifiers")
+        if type(data["port"]) is not int or not 1 <= data["port"] <= 65535 or not PATH.fullmatch(data["health_path"]):
+            raise ValueError("Invalid upstream")
+        container = self.container(release)
+        with self.lock, self.file_lock():
+            ingress, _ = self.inspect("dial-ingress")
+            if not ingress:
+                raise OperationError("Ingress container unavailable")
+            item = json.loads(self.runner(["docker", "inspect", container], 15))[0]
+            labels = item.get("Config", {}).get("Labels", {})
+            if labels.get("dial.application") != app or labels.get("dial.release") != release:
+                raise OperationError("Route container ownership mismatch")
+            running, ip = self.inspect(container)
+            if not running or not ip or not self.health_probe(ip, data["port"], data["health_path"]):
+                raise OperationError("Route upstream is not healthy")
+            document = route_document(app, release, data["hostname"], container, data["port"])
+            route_file = self.routes_dir / (app + ".json")
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.routes_dir,
+                                             prefix=".route-", delete=False) as file:
+                temporary = Path(file.name)
+                try:
+                    os.chmod(temporary, 0o600)
+                    json.dump(document, file, separators=(",", ":"))
+                    file.flush()
+                    os.fsync(file.fileno())
+                except Exception:
+                    temporary.unlink(missing_ok=True)
+                    raise
+            os.replace(temporary, route_file)
+            with self.db() as db:
+                db.execute("INSERT INTO routes(application_id,release_id,hostname) VALUES (?,?,?) "
+                           "ON CONFLICT(application_id) DO UPDATE SET release_id=excluded.release_id,hostname=excluded.hostname",
+                           (app, release, data["hostname"]))
+            return {"application_id": app, "release_id": release, "hostname": data["hostname"], "state": "ROUTED"}
+
+    def unroute(self, application_id, release_id):
+        app, release = str(uuid.UUID(application_id)), str(uuid.UUID(release_id))
+        with self.lock, self.file_lock(), self.db() as db:
+            row = db.execute("SELECT release_id FROM routes WHERE application_id=?", (app,)).fetchone()
+            if row and row["release_id"] != release:
+                raise OperationError("A different release owns the public route")
+            (self.routes_dir / (app + ".json")).unlink(missing_ok=True)
+            db.execute("DELETE FROM routes WHERE application_id=?", (app,))
+        return {"application_id": app, "release_id": release, "state": "UNROUTED"}
 
     def observed(self, application_id):
         app_id = str(uuid.UUID(application_id))
