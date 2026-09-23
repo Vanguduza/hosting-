@@ -1,0 +1,17 @@
+[Unit]
+Description=Back up and restore-drill all local DIAL client PostgreSQL instances
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/dial-hosting/postgres-backup.env
+ExecStart=/usr/bin/python3 /opt/dial-hosting/postgres_backup.py backup-all
+WorkingDirectory=/var/lib/dial-hosting/backup
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+TimeoutStartSec=21600

@@ -14,6 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "agents/node-agent"))
 from node_agent.core import Node, OperationError
 from node_agent.postgres import names, provision
+sys.path.insert(0, str(ROOT / "tools"))
+from postgres_backup import backup, restore_drill, configuration, run
 
 
 @unittest.skipUnless(os.environ.get("POSTGRES_RUNTIME_IMAGE"), "requires disposable Docker PostgreSQL image")
@@ -52,6 +54,31 @@ class PostgresRuntime(unittest.TestCase):
                 workload = json.loads(subprocess.check_output(["docker", "inspect", node.container(release)]))[0]
                 self.assertIn(network, workload["NetworkSettings"]["Networks"])
                 self.assertEqual(workload["Config"]["Env"].count("DATABASE_PASSWORD_FILE=/run/secrets/postgres_password"), 1)
+                if os.environ.get("POSTGRES_RUNTIME_BACKUP"):
+                    backup_env = {key: os.environ.get(key) for key in
+                                  ("RESTIC_REPOSITORY", "RESTIC_PASSWORD_FILE", "BACKUP_EVIDENCE_DIR")}
+                    try:
+                        repository = Path(temp) / "restic"
+                        evidence = Path(temp) / "evidence"
+                        restic_password = Path(temp) / "restic-password"
+                        restic_password.write_text("disposable-only-credential-" + uuid.uuid4().hex)
+                        os.chmod(restic_password, 0o600)
+                        os.environ.update(RESTIC_REPOSITORY=str(repository),
+                                          RESTIC_PASSWORD_FILE=str(restic_password),
+                                          BACKUP_EVIDENCE_DIR=str(evidence))
+                        run(["restic", "init"], 120)
+                        directory, image = configuration(offhost=False)
+                        snapshot = backup(instance, directory)
+                        self.assertEqual(snapshot["state"], "BACKUP_CREATED")
+                        verified = restore_drill(instance, snapshot["snapshot_id"], directory, image)
+                        self.assertEqual(verified["state"], "RESTORE_VERIFIED")
+                        self.assertGreaterEqual(verified["restored_table_count"], 1)
+                    finally:
+                        for key, value in backup_env.items():
+                            if value is None:
+                                os.environ.pop(key, None)
+                            else:
+                                os.environ[key] = value
                 self.assertEqual(provision(node, payload), receipt)
                 self.assertEqual(node.deliver_secrets({"resource_id": instance, "version": 1,
                                                        "values": {"postgres_password": "B" * 48,
