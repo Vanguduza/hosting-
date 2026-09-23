@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "agents/node-agent"))
 from node_agent.core import Node, OperationError
 from node_agent.postgres import names, provision
+from node_agent.valkey import names as cache_names, provision as cache_provision
 sys.path.insert(0, str(ROOT / "tools"))
 from postgres_backup import backup, restore_drill, backup_all, configuration, run
 
@@ -24,17 +25,26 @@ class PostgresRuntime(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             node = Node(Path(temp) / "state.sqlite3")
             instance, app = str(uuid.uuid4()), str(uuid.uuid4())
+            cache = str(uuid.uuid4())
             password = "A" * 48
             node.deliver_secrets({"resource_id": instance, "version": 1,
                                   "values": {"postgres_password": "B" * 48, "app_password": password}})
+            node.deliver_secrets({"resource_id": cache, "version": 1,
+                                  "values": {"app_password": "C" * 48}})
             payload = {"instance_id": instance, "application_id": app,
                        "memory_mb": 256, "cpu_milli": 250, "secret_version": 1}
             container, network, volume = names(instance)
+            cache_container, cache_network, cache_volume = cache_names(cache)
             release = str(uuid.uuid4())
             previous = os.environ.get("NODE_POSTGRES_IMAGE")
+            previous_cache = os.environ.get("NODE_VALKEY_IMAGE")
             os.environ["NODE_POSTGRES_IMAGE"] = os.environ["POSTGRES_RUNTIME_IMAGE"]
+            os.environ["NODE_VALKEY_IMAGE"] = os.environ["VALKEY_RUNTIME_IMAGE"]
             try:
                 receipt = provision(node, payload)
+                self.assertEqual(cache_provision(node, {"instance_id": cache, "application_id": app,
+                                                        "memory_mb": 128, "cpu_milli": 100,
+                                                        "secret_version": 1})["state"], "READY_PRIVATE")
                 self.assertEqual(receipt["state"], "READY_PRIVATE")
                 inspect = json.loads(subprocess.check_output(["docker", "inspect", container]))[0]
                 self.assertEqual(inspect["HostConfig"]["PortBindings"], {})
@@ -49,13 +59,16 @@ class PostgresRuntime(unittest.TestCase):
                 app_receipt = node.deploy({"operation_id": str(uuid.uuid4()), "application_id": app,
                                            "release_id": release, "image": os.environ["POSTGRES_RUNTIME_WEB_IMAGE"],
                                            "port": 8080, "health_path": "/health", "memory_mb": 128,
-                                           "cpu_milli": 100, "postgres_id": instance, "postgres_version": 1})
+                                           "cpu_milli": 100, "postgres_id": instance, "postgres_version": 1,
+                                           "valkey_id": cache, "valkey_version": 1})
                 self.assertEqual(app_receipt["state"], "HEALTHY_PRIVATE")
                 workload = json.loads(subprocess.check_output(["docker", "inspect", node.container(release)]))[0]
                 self.assertIn(network, workload["NetworkSettings"]["Networks"])
+                self.assertIn(cache_network, workload["NetworkSettings"]["Networks"])
                 self.assertIn(node.application_network(app), workload["NetworkSettings"]["Networks"])
                 self.assertNotIn("dial-runtime", workload["NetworkSettings"]["Networks"])
                 self.assertEqual(workload["Config"]["Env"].count("DATABASE_PASSWORD_FILE=/run/secrets/postgres_password"), 1)
+                self.assertIn("CACHE_PASSWORD_FILE=/run/secrets/valkey_password", workload["Config"]["Env"])
                 if os.environ.get("POSTGRES_RUNTIME_BACKUP"):
                     backup_env = {key: os.environ.get(key) for key in
                                   ("RESTIC_REPOSITORY", "RESTIC_PASSWORD_FILE", "BACKUP_EVIDENCE_DIR")}
@@ -102,10 +115,18 @@ class PostgresRuntime(unittest.TestCase):
                     provision(node, payload)
             finally:
                 subprocess.run(["docker", "rm", "-f", node.container(release)], capture_output=True)
+                subprocess.run(["docker", "rm", "-f", cache_container], capture_output=True)
+                subprocess.run(["docker", "volume", "rm", cache_volume], capture_output=True)
+                subprocess.run(["docker", "network", "rm", cache_network], capture_output=True)
                 subprocess.run(["docker", "rm", "-f", container], capture_output=True)
                 subprocess.run(["docker", "volume", "rm", volume], capture_output=True)
                 subprocess.run(["docker", "network", "rm", network], capture_output=True)
+                subprocess.run(["docker", "network", "rm", node.application_network(app)], capture_output=True)
                 if previous is None:
                     os.environ.pop("NODE_POSTGRES_IMAGE", None)
                 else:
                     os.environ["NODE_POSTGRES_IMAGE"] = previous
+                if previous_cache is None:
+                    os.environ.pop("NODE_VALKEY_IMAGE", None)
+                else:
+                    os.environ["NODE_VALKEY_IMAGE"] = previous_cache
