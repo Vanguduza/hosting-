@@ -1,6 +1,9 @@
 """Runs against disposable PostgreSQL in CI; skipped without TEST_ADMIN_DSN."""
 import os
+import hashlib
+import json
 import sys
+import tempfile
 import unittest
 import uuid
 from pathlib import Path
@@ -10,10 +13,12 @@ from psycopg.rows import dict_row
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "services/api"))
+sys.path.insert(0, str(ROOT / "tools"))
 from hosting_api.__main__ import Handler
 from hosting_api.worker import claim, finalize, sweep_retirements, sweep_failed
 from hosting_api.postgres_jobs import claim as claim_postgres, finalize as finalize_postgres
 from hosting_api.valkey_jobs import claim as claim_valkey, finalize as finalize_valkey
+import admit_image
 from unittest.mock import patch
 
 
@@ -354,6 +359,32 @@ class DatabaseIntegration(unittest.TestCase):
         with psycopg.connect(self.admin, row_factory=dict_row) as conn:
             self.assertEqual(conn.execute("SELECT policy_revision FROM hosting.artifact_admissions WHERE image=%s",
                                           (image,)).fetchone()["policy_revision"], "ci")
+
+    def test_admission_receipt_replay_after_completed_write(self):
+        image = "registry.example.test/team/replay@sha256:" + "1" * 64
+        with tempfile.TemporaryDirectory() as temp:
+            evidence = Path(temp) / "evidence"
+            key = Path(temp) / "cosign.pub"
+            key.write_text("disposable-ci-key")
+            args = ["admit_image.py", "--image", image, "--source-commit", "2" * 40,
+                    "--policy-revision", "ci-replay", "--cosign-public-key", str(key),
+                    "--evidence-dir", str(evidence)]
+            fake = [json.dumps([{"critical": {"image": {"docker-manifest-digest": "sha256:" + "1" * 64}}}]),
+                    json.dumps({"Results": []}), json.dumps({"bomFormat": "CycloneDX"})]
+            with patch.dict(os.environ, {"HOSTING_ADMISSION_DSN": os.environ["TEST_ADMITTER_DSN"]}), \
+                    patch.object(sys, "argv", args), patch("admit_image.run", side_effect=fake) as subprocess_run:
+                admit_image.main()
+                self.assertEqual(subprocess_run.call_count, 3)
+                admit_image.main()
+                self.assertEqual(subprocess_run.call_count, 3)  # Exact replay uses recorded proof.
+            with psycopg.connect(self.admin) as conn:
+                self.assertEqual(conn.execute("SELECT count(*) FROM hosting.artifact_admissions WHERE image=%s",
+                                              (image,)).fetchone()[0], 1)
+            artifact = hashlib.sha256(image.encode()).hexdigest()
+            (evidence / f"{artifact}.sbom.json").write_text("tampered")
+            with patch.dict(os.environ, {"HOSTING_ADMISSION_DSN": os.environ["TEST_ADMITTER_DSN"]}), \
+                    patch.object(sys, "argv", args), self.assertRaises(RuntimeError):
+                admit_image.main()
 
 
 if __name__ == "__main__":
