@@ -20,6 +20,9 @@ def main():
     org_id, request_id = uuid.uuid4(), uuid.uuid4()
     with psycopg.connect(dsn, connect_timeout=5) as conn:
         with conn.transaction():
+            principal = conn.execute("SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname=current_user").fetchone()
+            if not principal or not any(principal):
+                raise RuntimeError("Enrollment requires a protected operator role with RLS bypass; the API role is forbidden")
             conn.execute("INSERT INTO hosting.organizations(id,name) VALUES (%s,%s)", (org_id, args.name))
             conn.execute(
                 "INSERT INTO hosting.memberships(organization_id,actor_sub,role) VALUES (%s,%s,'owner')",

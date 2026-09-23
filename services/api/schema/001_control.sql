@@ -50,6 +50,15 @@ REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 
 -- This schema is private to the control plane and not exposed by PostgREST.
 -- RLS adds defense in depth; the API explicitly checks membership for every route.
+ALTER TABLE hosting.memberships ENABLE ROW LEVEL SECURITY;
+ALTER TABLE hosting.memberships FORCE ROW LEVEL SECURITY;
+CREATE POLICY memberships_self ON hosting.memberships FOR SELECT TO hosting_api
+  USING (actor_sub=current_setting('hosting.actor_sub',true));
+ALTER TABLE hosting.organizations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE hosting.organizations FORCE ROW LEVEL SECURITY;
+CREATE POLICY organizations_members ON hosting.organizations FOR SELECT TO hosting_api
+  USING (EXISTS (SELECT 1 FROM hosting.memberships m
+                 WHERE m.organization_id=organizations.id AND m.actor_sub=current_setting('hosting.actor_sub',true)));
 ALTER TABLE hosting.projects ENABLE ROW LEVEL SECURITY;
 ALTER TABLE hosting.projects FORCE ROW LEVEL SECURITY;
 CREATE POLICY projects_api_read ON hosting.projects FOR SELECT TO hosting_api
@@ -59,3 +68,12 @@ CREATE POLICY projects_api_insert ON hosting.projects FOR INSERT TO hosting_api
   WITH CHECK (EXISTS (SELECT 1 FROM hosting.memberships m
                       WHERE m.organization_id=projects.organization_id AND m.actor_sub=current_setting('hosting.actor_sub',true)
                       AND m.role IN ('owner','admin')));
+ALTER TABLE hosting.audit_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE hosting.audit_events FORCE ROW LEVEL SECURITY;
+CREATE POLICY audit_api_read ON hosting.audit_events FOR SELECT TO hosting_api
+  USING (EXISTS (SELECT 1 FROM hosting.memberships m
+                 WHERE m.organization_id=audit_events.organization_id AND m.actor_sub=current_setting('hosting.actor_sub',true)));
+CREATE POLICY audit_api_insert ON hosting.audit_events FOR INSERT TO hosting_api
+  WITH CHECK (actor_sub=current_setting('hosting.actor_sub',true) AND
+              EXISTS (SELECT 1 FROM hosting.memberships m
+                      WHERE m.organization_id=audit_events.organization_id AND m.actor_sub=current_setting('hosting.actor_sub',true)));
