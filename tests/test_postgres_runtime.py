@@ -28,6 +28,7 @@ class PostgresRuntime(unittest.TestCase):
             payload = {"instance_id": instance, "application_id": app,
                        "memory_mb": 256, "cpu_milli": 250, "secret_version": 1}
             container, network, volume = names(instance)
+            release = str(uuid.uuid4())
             previous = os.environ.get("NODE_POSTGRES_IMAGE")
             os.environ["NODE_POSTGRES_IMAGE"] = os.environ["POSTGRES_RUNTIME_IMAGE"]
             try:
@@ -43,6 +44,14 @@ class PostgresRuntime(unittest.TestCase):
                     self.assertFalse(conn.execute("SELECT rolsuper FROM pg_roles WHERE rolname=current_user").fetchone()[0])
                     conn.execute("CREATE TABLE durable_test (value integer)")
                     conn.execute("INSERT INTO durable_test VALUES (42)")
+                app_receipt = node.deploy({"operation_id": str(uuid.uuid4()), "application_id": app,
+                                           "release_id": release, "image": os.environ["POSTGRES_RUNTIME_WEB_IMAGE"],
+                                           "port": 8080, "health_path": "/health", "memory_mb": 128,
+                                           "cpu_milli": 100, "postgres_id": instance, "postgres_version": 1})
+                self.assertEqual(app_receipt["state"], "HEALTHY_PRIVATE")
+                workload = json.loads(subprocess.check_output(["docker", "inspect", node.container(release)]))[0]
+                self.assertIn(network, workload["NetworkSettings"]["Networks"])
+                self.assertEqual(workload["Config"]["Env"].count("DATABASE_PASSWORD_FILE=/run/secrets/postgres_password"), 1)
                 self.assertEqual(provision(node, payload), receipt)
                 subprocess.run(["docker", "restart", container], check=True, capture_output=True)
                 self.assertEqual(provision(node, payload), receipt)
@@ -52,6 +61,7 @@ class PostgresRuntime(unittest.TestCase):
                 with self.assertRaises(OperationError):
                     provision(node, {**payload, "application_id": str(uuid.uuid4())})
             finally:
+                subprocess.run(["docker", "rm", "-f", node.container(release)], capture_output=True)
                 subprocess.run(["docker", "rm", "-f", container], capture_output=True)
                 subprocess.run(["docker", "volume", "rm", volume], capture_output=True)
                 subprocess.run(["docker", "network", "rm", network], capture_output=True)
