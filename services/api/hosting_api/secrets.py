@@ -79,12 +79,14 @@ class OpenBao:
         return token
 
     def put(self, resource_id, values, cas):
-        if type(cas) is not int or cas < 0 or not isinstance(values, dict) or not values:
+        if type(cas) is not int or cas < 0 or not isinstance(values, dict) or not values or len(values) > 16:
             raise ValueError("Invalid secret version or values")
         if not all(isinstance(key, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", key)
                    and isinstance(value, str) and 1 <= len(value) <= 8192
                    for key, value in values.items()):
             raise ValueError("Invalid secret value or key")
+        if len(json.dumps(values).encode()) > 60000:
+            raise ValueError("Secret payload too large for node delivery")
         path = secret_path(resource_id)
         result = self.request("POST", self.mount + "/data/" + path,
                               {"options": {"cas": cas}, "data": values}, token=self.login())
@@ -107,4 +109,3 @@ class OpenBao:
                 (version is not None and metadata["version"] != version)):
             raise SecretError("OpenBao secret data or version missing")
         return metadata["version"], values
-

@@ -1,5 +1,6 @@
 """Versioned node-local secret delivery. Never returns secret values in receipts."""
 import os
+import json
 import re
 import tempfile
 import uuid
@@ -15,11 +16,13 @@ def install(directory, resource_id, version, values):
     ident = str(uuid.UUID(str(resource_id)))
     if type(version) is not int or version < 1:
         raise ValueError("Invalid secret revision")
-    if not isinstance(values, dict) or not values or not all(
+    if not isinstance(values, dict) or not values or len(values) > 16 or not all(
         isinstance(key, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", key)
         and isinstance(value, str) and 1 <= len(value) <= 8192 for key, value in values.items()
     ):
         raise ValueError("Invalid node secret values")
+    if len(json.dumps(values).encode()) > 60000:
+        raise ValueError("Secret payload too large")
     target = root / ident
     target.mkdir(mode=0o700, exist_ok=True)
     if target.is_symlink() or target.stat().st_mode & 0o077:

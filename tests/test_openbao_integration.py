@@ -34,11 +34,11 @@ class OpenBaoIntegration(unittest.TestCase):
                 docker("run", "-d", "--name", name, "-p", "127.0.0.1:18200:8200",
                        os.environ["OPENBAO_TEST_IMAGE"], "server", "-dev-tls",
                        "-dev-listen-address=0.0.0.0:8200", "-dev-root-token-id=disposable-ci-root",
-                       "-dev-tls-cert-dir=/tmp/dial-ci-certs")
+                       "-dev-tls-cert-dir=/tmp")
                 deadline = time.monotonic() + 60
                 while True:
                     try:
-                        docker("cp", name + ":/tmp/dial-ci-certs", str(root / "certs"))
+                        docker("cp", name + ":/tmp", str(root / "certs"))
                         break
                     except RuntimeError:
                         status = docker("inspect", "-f", "{{.State.Status}}", name).strip()
