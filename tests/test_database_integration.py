@@ -282,6 +282,10 @@ class DatabaseIntegration(unittest.TestCase):
                 self.assertEqual(handler.team(conn, self.org_a, "alice",
                                               {"actor_sub": "alice", "confirm": "remove_member"},
                                               "POST", uuid.uuid4(), action="remove")[0], 409)
+                with self.assertRaises(psycopg.errors.InsufficientPrivilege):
+                    with conn.transaction():
+                        conn.execute("INSERT INTO hosting.memberships(organization_id,actor_sub,role) "
+                                     "VALUES (%s,'forged','owner')", (self.org_a,))
         with psycopg.connect(self.api, row_factory=dict_row) as conn:
             with conn.transaction():
                 conn.execute("SELECT set_config('hosting.actor_sub','bob',true)")
@@ -295,6 +299,11 @@ class DatabaseIntegration(unittest.TestCase):
                 self.assertEqual(handler.team(conn, self.org_a, "bob", {}, "GET", uuid.uuid4())[0], 404)
         with psycopg.connect(self.api, row_factory=dict_row) as conn:
             with conn.transaction():
+                conn.execute("SELECT set_config('hosting.actor_sub','carol',true)")
+                self.assertEqual(handler.accept_invitation(conn, "carol", {"token": invite["token"]},
+                                                           uuid.uuid4())[0], 409)
+        with psycopg.connect(self.api, row_factory=dict_row) as conn:
+            with conn.transaction():
                 conn.execute("SELECT set_config('hosting.actor_sub','alice',true)")
                 members = handler.team(conn, self.org_a, "alice", {}, "GET", uuid.uuid4(),
                                        action="members")[1]["members"]
@@ -303,17 +312,26 @@ class DatabaseIntegration(unittest.TestCase):
                                       {"idempotency_key": str(uuid.uuid4()), "role": "viewer",
                                        "expires_hours": 1, "confirm": "invite_viewer"},
                                       "POST", uuid.uuid4())[1]
+                expired = handler.team(conn, self.org_a, "alice",
+                                       {"idempotency_key": str(uuid.uuid4()), "role": "viewer",
+                                        "expires_hours": 1, "confirm": "invite_viewer"},
+                                       "POST", uuid.uuid4())[1]
                 self.assertEqual(handler.team(conn, self.org_a, "alice", {"invitation_id": str(second["id"])},
                                               "POST", uuid.uuid4(), action="revoke")[0], 200)
                 self.assertEqual(handler.team(conn, self.org_a, "alice",
                                               {"actor_sub": "bob", "confirm": "remove_member"},
                                               "POST", uuid.uuid4(), action="remove")[0], 200)
+        with psycopg.connect(self.admin) as conn:
+            conn.execute("UPDATE hosting.team_invitations SET created_at=now()-interval '2 hours',"
+                         "expires_at=now()-interval '1 hour' WHERE id=%s", (expired["id"],))
         with psycopg.connect(self.api, row_factory=dict_row) as conn:
             with conn.transaction():
                 conn.execute("SELECT set_config('hosting.actor_sub','bob',true)")
                 self.assertEqual(handler.accept_invitation(conn, "bob", {"token": invite["token"]},
                                                            uuid.uuid4())[0], 409)
                 self.assertEqual(handler.accept_invitation(conn, "bob", {"token": second["token"]},
+                                                           uuid.uuid4())[0], 409)
+                self.assertEqual(handler.accept_invitation(conn, "bob", {"token": expired["token"]},
                                                            uuid.uuid4())[0], 409)
                 self.assertEqual(conn.execute("SELECT role FROM hosting.memberships WHERE organization_id=%s",
                                               (self.org_a,)).fetchall(), [])
