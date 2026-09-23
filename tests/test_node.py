@@ -58,7 +58,7 @@ class NodeTests(unittest.TestCase):
             self.assertEqual(receipt["state"], "HEALTHY_PRIVATE")
             before = len(fixture.calls)
             self.assertEqual(node.deploy(first), receipt)
-            self.assertEqual(len(fixture.calls), before)
+            self.assertEqual(fixture.calls[before:], [["docker", "inspect", Node.container(first["release_id"])]])
             with self.assertRaises(OperationError):
                 node.deploy({**first, "image": first["image"].replace("a" * 64, "b" * 64)})
             self.assertEqual(node.observed(first["application_id"])["release_id"], first["release_id"])
@@ -87,6 +87,18 @@ class NodeTests(unittest.TestCase):
                 with self.assertRaises(OperationError):
                     node.deploy(second)
             self.assertEqual(node.observed(first["application_id"])["release_id"], promoted)
+
+    def test_stale_success_receipt_is_rechecked(self):
+        fixture = DockerFixture()
+        with tempfile.TemporaryDirectory() as directory:
+            node = Node(Path(directory) / "agent.sqlite3", runner=fixture,
+                        health_probe=lambda ip, port, path: True)
+            first = request()
+            node.deploy(first)
+            fixture.containers.pop(Node.container(first["release_id"]))
+            previous_pulls = len([call for call in fixture.calls if call[1] == "pull"])
+            self.assertEqual(node.deploy(first)["state"], "HEALTHY_PRIVATE")
+            self.assertEqual(len([call for call in fixture.calls if call[1] == "pull"]), previous_pulls + 1)
 
 
 if __name__ == "__main__":

@@ -71,6 +71,7 @@ class Node:
         with self.db() as db:
             db.execute("CREATE TABLE IF NOT EXISTS operations (id TEXT PRIMARY KEY, input_hash TEXT NOT NULL, state TEXT NOT NULL, receipt TEXT)")
             db.execute("CREATE TABLE IF NOT EXISTS active (application_id TEXT PRIMARY KEY, release_id TEXT NOT NULL, container TEXT NOT NULL)")
+        os.chmod(self.state_file, 0o600)
 
     def db(self):
         db = sqlite3.connect(self.state_file, timeout=20)
@@ -119,9 +120,15 @@ class Node:
                 existing = db.execute("SELECT * FROM operations WHERE id=?", (operation_id,)).fetchone()
                 if existing and existing["input_hash"] != digest:
                     raise OperationError("Idempotency key used for a different command")
-                if existing and existing["state"] == "COMPLETE":
-                    return json.loads(existing["receipt"])
                 active = db.execute("SELECT * FROM active WHERE application_id=?", (app_id,)).fetchone()
+                if existing and existing["state"] == "COMPLETE":
+                    if not active or active["release_id"] != release_id:
+                        raise OperationError("Completed operation has been superseded")
+                    running, ip = self.inspect(container)
+                    if running and ip and self.health_probe(ip, request["port"], request["health_path"]):
+                        return json.loads(existing["receipt"])
+                    # Stored success is not live evidence. Reconcile the same
+                    # digest-pinned release before returning a new receipt.
                 if active and active["release_id"] == release_id:
                     running, ip = self.inspect(container)
                     if running and ip and self.health_probe(ip, request["port"], request["health_path"]):

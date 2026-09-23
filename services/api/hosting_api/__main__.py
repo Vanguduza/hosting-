@@ -140,10 +140,13 @@ class Handler(BaseHTTPRequestHandler):
         conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 1))", (str(app_id),))
         app = conn.execute("SELECT active_release_id FROM hosting.applications WHERE id=%s", (app_id,)).fetchone()
         existing = conn.execute(
-            "SELECT id,state FROM hosting.releases WHERE organization_id=%s AND application_id=%s AND idempotency_key=%s",
+            "SELECT id,state,image,port,health_path,memory_mb,cpu_milli FROM hosting.releases "
+            "WHERE organization_id=%s AND application_id=%s AND idempotency_key=%s",
             (org_id, app_id, body["idempotency_key"]),
         ).fetchone()
         if existing:
+            if any(existing[key] != body[key] for key in ("image", "port", "health_path", "memory_mb", "cpu_milli")):
+                return 409, {"error": "idempotency_conflict"}
             return 200, {"id": existing["id"], "state": existing["state"], "replayed": True}
         pending = conn.execute("SELECT 1 FROM hosting.releases WHERE application_id=%s AND state IN ('QUEUED','DEPLOYING')",
                                (app_id,)).fetchone()

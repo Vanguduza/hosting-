@@ -55,6 +55,8 @@ class DatabaseIntegration(unittest.TestCase):
                 status, release = handler.releases(conn, self.org_a, app_id, "alice", body, "POST", uuid.uuid4())
                 self.assertEqual(status, 202)
                 self.assertEqual(handler.releases(conn, self.org_a, app_id, "alice", body, "POST", uuid.uuid4())[0], 200)
+                mismatch = {**body, "memory_mb": 256}
+                self.assertEqual(handler.releases(conn, self.org_a, app_id, "alice", mismatch, "POST", uuid.uuid4())[1]["error"], "idempotency_conflict")
                 other = {**body, "idempotency_key": str(uuid.uuid4())}
                 self.assertEqual(handler.releases(conn, self.org_a, app_id, "alice", other, "POST", uuid.uuid4())[0], 409)
                 self.assertEqual(handler.releases(conn, self.org_b, app_id, "alice", body, "GET", uuid.uuid4())[0], 404)
