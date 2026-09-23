@@ -32,7 +32,10 @@ def command(args, timeout=60):
 
 def valid(request):
     required = {"operation_id", "application_id", "release_id", "image", "port", "health_path", "memory_mb", "cpu_milli"}
-    if not required <= set(request) or set(request) - required not in (set(), {"postgres_id", "postgres_version"}):
+    optional = set(request) - required
+    if not required <= set(request) or optional not in (
+        set(), {"postgres_id", "postgres_version"}, {"valkey_id", "valkey_version"},
+        {"postgres_id", "postgres_version", "valkey_id", "valkey_version"}):
         raise ValueError("Unexpected or missing deployment properties")
     for key in ("operation_id", "application_id", "release_id"):
         if not isinstance(request[key], str) or str(uuid.UUID(request[key])) != request[key]:
@@ -52,6 +55,11 @@ def valid(request):
         identifier(request["postgres_id"])
         if type(request["postgres_version"]) is not int or request["postgres_version"] < 1:
             raise ValueError("Invalid PostgreSQL secret version")
+    if "valkey_id" in request:
+        from .postgres import identifier
+        identifier(request["valkey_id"])
+        if type(request["valkey_version"]) is not int or request["valkey_version"] != 1:
+            raise ValueError("Invalid Valkey secret version")
     return request
 
 
@@ -186,6 +194,16 @@ class Node:
                                     "-e", "DATABASE_HOST=" + pg_container, "-e", "DATABASE_NAME=appdb",
                                     "-e", "DATABASE_USER=dial_app",
                                     "-e", "DATABASE_PASSWORD_FILE=/run/secrets/postgres_password"]
+                    vk_flags = []
+                    if "valkey_id" in request:
+                        from .valkey import names, password_mount
+                        cache_file = password_mount(self, request["valkey_id"], request["valkey_version"])
+                        cache_container = names(request["valkey_id"])[0]
+                        vk_flags = ["--mount", "type=bind,src=" + str(cache_file) +
+                                    ",dst=/run/secrets/valkey_password,readonly",
+                                    "-e", "CACHE_HOST=" + cache_container, "-e", "CACHE_PORT=6379",
+                                    "-e", "CACHE_USER=dial_app",
+                                    "-e", "CACHE_PASSWORD_FILE=/run/secrets/valkey_password"]
                     self.runner([
                         "docker", "run", "-d", "--name", container,
                         "--label", "dial.application=" + app_id,
@@ -196,11 +214,15 @@ class Node:
                         "--cpus=" + str(request["cpu_milli"] / 1000),
                         "--user=10001:10001", "--tmpfs=/tmp:rw,nosuid,noexec,size=64m",
                         *pg_flags,
+                        *vk_flags,
                         request["image"],
                     ], 120)
                 if "postgres_id" in request:
                     from .postgres import attach
                     attach(self, request["postgres_id"], app_id, release_id)
+                if "valkey_id" in request:
+                    from .valkey import attach as attach_valkey
+                    attach_valkey(self, request["valkey_id"], app_id, release_id)
                 deadline = time.monotonic() + 90
                 healthy = False
                 while time.monotonic() < deadline:

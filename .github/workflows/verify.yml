@@ -88,3 +88,17 @@ jobs:
       - run: python -m unittest tests.test_openbao_integration -v
         env:
           OPENBAO_TEST_IMAGE: openbao/openbao:2.6.0
+  valkey-runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: docker pull valkey/valkey:9
+      - run: echo "VALKEY_RUNTIME_IMAGE=$(docker image inspect valkey/valkey:9 --format '{{index .RepoDigests 0}}')" >> "$GITHUB_ENV"
+      - run: docker run -d --name dial-vk-ci-registry -p 127.0.0.1:5000:5000 registry:3
+      - run: docker build -t 127.0.0.1:5000/dial-ci/vk-web:test tests/fixtures/web
+      - run: docker push 127.0.0.1:5000/dial-ci/vk-web:test
+      - run: echo "VALKEY_RUNTIME_WEB_IMAGE=$(docker image inspect 127.0.0.1:5000/dial-ci/vk-web:test --format '{{index .RepoDigests 0}}')" >> "$GITHUB_ENV"
+      - run: python -m unittest tests.test_valkey_runtime -v

@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / "services/api"))
 from hosting_api.__main__ import Handler
 from hosting_api.worker import claim, finalize, sweep_retirements, sweep_failed
 from hosting_api.postgres_jobs import claim as claim_postgres, finalize as finalize_postgres
+from hosting_api.valkey_jobs import claim as claim_valkey, finalize as finalize_valkey
 from unittest.mock import patch
 
 
@@ -198,6 +199,49 @@ class DatabaseIntegration(unittest.TestCase):
                 # The database's node is the only eligible release placement.
                 domain = handler.domains(conn, self.org_a, app_id, "alice",
                                          {"hostname": "dbclient.example.org"}, "POST", uuid.uuid4())[1]
+                with patch("hosting_api.__main__.txt_proves", return_value=True):
+                    handler.domains(conn, self.org_a, app_id, "alice", {}, "POST", uuid.uuid4(), verify=True)
+                status, release = handler.releases(conn, self.org_a, app_id, "alice", {
+                    "idempotency_key": str(uuid.uuid4()), "image": self.image, "port": 8080,
+                    "health_path": "/health", "cpu_milli": 100, "memory_mb": 128}, "POST", uuid.uuid4())
+                self.assertEqual(status, 202)
+                self.assertEqual(conn.execute("SELECT node_id FROM hosting.releases WHERE id=%s",
+                                              (release["id"],)).fetchone()["node_id"], self.node)
+
+    def test_zz_valkey_tenant_reservation_and_job(self):
+        handler = Handler.__new__(Handler)
+        with psycopg.connect(self.api, row_factory=dict_row) as conn:
+            with conn.transaction():
+                conn.execute("SELECT set_config('hosting.actor_sub','alice',true)")
+                _, app = handler.applications(conn, self.org_a, self.project_a, "alice",
+                                               {"name": "cache-client", "environment": "production"},
+                                               "POST", uuid.uuid4())
+                app_id = app["id"]
+                body = {"idempotency_key": str(uuid.uuid4()), "memory_mb": 128, "cpu_milli": 200}
+                self.assertEqual(handler.valkey(conn, self.org_b, app_id, "alice", body, "POST", uuid.uuid4())[0], 404)
+                code, queued = handler.valkey(conn, self.org_a, app_id, "alice", body, "POST", uuid.uuid4())
+                self.assertEqual(code, 202)
+                self.assertEqual(handler.valkey(conn, self.org_a, app_id, "alice", body, "POST", uuid.uuid4())[0], 200)
+                self.assertEqual(handler.valkey(conn, self.org_a, app_id, "alice", {**body, "memory_mb": 256},
+                                                "POST", uuid.uuid4())[0], 409)
+                self.assertEqual(handler.valkey(conn, self.org_a, app_id, "alice", {}, "GET", uuid.uuid4())[1]
+                                 ["valkey"]["state"], "QUEUED")
+        with psycopg.connect(self.worker, row_factory=dict_row, autocommit=True) as conn:
+            job, instance, node, attempt = claim_valkey(conn)
+            self.assertEqual(instance["id"], queued["id"])
+            self.assertEqual(node["id"], self.node)
+            self.assertTrue(finalize_valkey(conn, job, instance, attempt, receipt={
+                "instance_id": str(instance["id"]), "state": "READY_PRIVATE", "secret_version": 1,
+                "host": "dial-vk-" + str(instance["id"])}))
+        with psycopg.connect(self.api, row_factory=dict_row) as conn:
+            with conn.transaction():
+                conn.execute("SELECT set_config('hosting.actor_sub','alice',true)")
+                self.assertEqual(handler.valkey(conn, self.org_a, app_id, "alice", {}, "GET", uuid.uuid4())[1]
+                                 ["valkey"]["state"], "READY")
+                self.assertEqual(conn.execute("SELECT id FROM hosting.valkey_instances WHERE organization_id=%s",
+                                              (self.org_b,)).fetchall(), [])
+                handler.domains(conn, self.org_a, app_id, "alice",
+                                {"hostname": "cacheclient.example.org"}, "POST", uuid.uuid4())
                 with patch("hosting_api.__main__.txt_proves", return_value=True):
                     handler.domains(conn, self.org_a, app_id, "alice", {}, "POST", uuid.uuid4(), verify=True)
                 status, release = handler.releases(conn, self.org_a, app_id, "alice", {

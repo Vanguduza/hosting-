@@ -52,7 +52,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_PUT(self):
         if not self.authorized():
             return self.reply(403, {"error": "forbidden"})
-        if urlsplit(self.path).path not in ("/v1/deployments", "/v1/routes", "/v1/resource-secrets", "/v1/postgres"):
+        if urlsplit(self.path).path not in ("/v1/deployments", "/v1/routes", "/v1/resource-secrets", "/v1/postgres", "/v1/valkey"):
             return self.reply(404, {"error": "not_found"})
         try:
             size = int(self.headers.get("Content-Length", "0"))
@@ -63,6 +63,9 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError()
             if urlsplit(self.path).path == "/v1/postgres":
                 from .postgres import provision
+                receipt = provision(self.server.node, data)
+            elif urlsplit(self.path).path == "/v1/valkey":
+                from .valkey import provision
                 receipt = provision(self.server.node, data)
             elif urlsplit(self.path).path == "/v1/deployments":
                 receipt = self.server.node.deploy(data)
