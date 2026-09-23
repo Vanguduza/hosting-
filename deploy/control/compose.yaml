@@ -12,6 +12,9 @@ services:
       - ./00_create_api_role.sh:/docker-entrypoint-initdb.d/00_create_api_role.sh:ro
       - ../../services/api/schema/001_control.sql:/docker-entrypoint-initdb.d/01_control.sql:ro
       - ../../services/api/schema/002_release.sql:/docker-entrypoint-initdb.d/02_release.sql:ro
+      - ../../services/api/schema/003_domains.sql:/docker-entrypoint-initdb.d/03_domains.sql:ro
+      - ../../services/api/schema/004_failed_cleanup.sql:/docker-entrypoint-initdb.d/04_failed_cleanup.sql:ro
+      - ../../services/api/schema/005_postgres.sql:/docker-entrypoint-initdb.d/05_postgres.sql:ro
     healthcheck:
       test: [CMD-SHELL, 'pg_isready -U postgres -d hosting']
       interval: 10s
