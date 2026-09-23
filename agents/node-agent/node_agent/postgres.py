@@ -73,6 +73,18 @@ def provision(node, data):
                 raise OperationError("Existing PostgreSQL container has different ownership")
             if stored.get("Config", {}).get("Image") != image:
                 raise OperationError("PostgreSQL image differs from existing persistent instance")
+            if (network not in stored.get("NetworkSettings", {}).get("Networks", {}) or
+                    stored.get("HostConfig", {}).get("PortBindings") or
+                    not any(mount.get("Name") == volume and
+                            mount.get("Destination") == "/var/lib/postgresql/data"
+                            for mount in stored.get("Mounts", []))):
+                raise OperationError("Existing PostgreSQL isolation or volume differs")
+            network_info = json.loads(node.runner(["docker", "network", "inspect", network], 15))[0]
+            volume_info = inspect(node, volume)
+            if (network_info.get("Labels", {}).get("dial.postgres") != instance or
+                    network_info.get("Internal") is not True or not volume_info or
+                    volume_info.get("Labels", {}).get("dial.postgres") != instance):
+                raise OperationError("Existing PostgreSQL network or volume ownership mismatch")
             if not stored.get("State", {}).get("Running"):
                 node.runner(["docker", "start", container], 60)
         else:

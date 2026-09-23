@@ -94,6 +94,10 @@ class ValkeyRuntime(unittest.TestCase):
                 self.assertEqual(wire(ip, ["AUTH", "dial_app", password], ["GET", "key"]), b"$7\r\ndurable\r\n")
                 with self.assertRaises(OperationError):
                     provision(node, {**payload, "application_id": str(uuid.uuid4())})
+                subprocess.run(["docker", "network", "disconnect", network, container],
+                               check=True, capture_output=True)
+                with self.assertRaises(OperationError):
+                    provision(node, payload)
             finally:
                 subprocess.run(["docker", "rm", "-f", node.container(release)], capture_output=True)
                 subprocess.run(["docker", "rm", "-f", node.container(foreign_release)], capture_output=True)

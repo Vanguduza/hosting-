@@ -79,6 +79,17 @@ def provision(node, data):
             if labels.get("dial.valkey") != instance or labels.get("dial.application") != app or \
                     existing.get("Config", {}).get("Image") != image:
                 raise OperationError("Existing Valkey ownership or image mismatch")
+            if (network not in existing.get("NetworkSettings", {}).get("Networks", {}) or
+                    existing.get("HostConfig", {}).get("PortBindings") or
+                    not any(mount.get("Name") == volume and mount.get("Destination") == "/data"
+                            for mount in existing.get("Mounts", []))):
+                raise OperationError("Existing Valkey isolation or volume differs")
+            network_info = json.loads(node.runner(["docker", "network", "inspect", network], 15))[0]
+            volume_info = inspect(node, volume)
+            if (network_info.get("Labels", {}).get("dial.valkey") != instance or
+                    network_info.get("Internal") is not True or not volume_info or
+                    volume_info.get("Labels", {}).get("dial.valkey") != instance):
+                raise OperationError("Existing Valkey network or volume ownership mismatch")
             if not existing.get("State", {}).get("Running"):
                 node.runner(["docker", "start", container], 60)
         else:
