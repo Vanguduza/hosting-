@@ -16,6 +16,7 @@ services:
       - ../../services/api/schema/004_failed_cleanup.sql:/docker-entrypoint-initdb.d/04_failed_cleanup.sql:ro
       - ../../services/api/schema/005_postgres.sql:/docker-entrypoint-initdb.d/05_postgres.sql:ro
       - ../../services/api/schema/006_valkey.sql:/docker-entrypoint-initdb.d/06_valkey.sql:ro
+      - ../../services/api/schema/007_team.sql:/docker-entrypoint-initdb.d/07_team.sql:ro
     healthcheck:
       test: [CMD-SHELL, 'pg_isready -U postgres -d hosting']
       interval: 10s

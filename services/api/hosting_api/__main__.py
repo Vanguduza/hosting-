@@ -1,6 +1,8 @@
 import json
+import hashlib
 import os
 import re
+import secrets
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
@@ -97,6 +99,95 @@ class Handler(BaseHTTPRequestHandler):
             (org_id, actor),
         ).fetchone()
         return row["role"] if row else None
+
+    def team(self, conn, org_id, actor, body, method, request_id, action="invitations"):
+        if self.membership(conn, org_id, actor) != "owner":
+            return 404, {"error": "not_found"}
+        if action == "members":
+            if method != "GET":
+                return 404, {"error": "not_found"}
+            rows = conn.execute("SELECT actor_sub,role FROM hosting.team_members(%s)", (org_id,)).fetchall()
+            return 200, {"members": rows}
+        if action == "remove":
+            target = body.get("actor_sub")
+            if method != "POST" or set(body) != {"actor_sub", "confirm"} or \
+                    not isinstance(target, str) or not 1 <= len(target) <= 255 or \
+                    body["confirm"] != "remove_member":
+                return 400, {"error": "invalid_member_removal"}
+            removed = conn.execute("SELECT hosting.remove_team_member(%s,%s)", (org_id, target)).fetchone()
+            if not removed or not removed["remove_team_member"]:
+                return 409, {"error": "member_removal_blocked"}
+            resource = uuid.uuid5(uuid.NAMESPACE_URL, "member/" + str(org_id) + "/" + target)
+            record(conn, org_id, actor, "team.member_removed", resource, request_id)
+            return 200, {"state": "REMOVED", "request_id": request_id}
+        if action == "revoke":
+            if method != "POST" or set(body) != {"invitation_id"}:
+                return 400, {"error": "invalid_invitation_revoke"}
+            try:
+                invitation_id = uuid.UUID(body["invitation_id"])
+                if str(invitation_id) != body["invitation_id"]:
+                    raise ValueError()
+            except (ValueError, TypeError, AttributeError):
+                return 400, {"error": "invalid_invitation_revoke"}
+            row = conn.execute("UPDATE hosting.team_invitations SET revoked_at=now() "
+                               "WHERE organization_id=%s AND id=%s AND accepted_at IS NULL AND revoked_at IS NULL "
+                               "RETURNING id", (org_id, invitation_id)).fetchone()
+            if not row:
+                return 409, {"error": "invitation_unavailable"}
+            record(conn, org_id, actor, "team.invitation_revoked", invitation_id, request_id)
+            return 200, {"state": "REVOKED", "request_id": request_id}
+        if action != "invitations":
+            return 404, {"error": "not_found"}
+        if method == "GET":
+            rows = conn.execute("SELECT id,role,issued_by,expires_at,created_at,accepted_by,accepted_at,revoked_at "
+                                "FROM hosting.team_invitations WHERE organization_id=%s "
+                                "ORDER BY created_at DESC LIMIT 100", (org_id,)).fetchall()
+            return 200, {"invitations": rows}
+        if method != "POST" or set(body) != {"idempotency_key", "role", "expires_hours", "confirm"} or \
+                body["role"] not in ("admin", "viewer") or \
+                body["confirm"] != "invite_" + body["role"] or \
+                type(body["expires_hours"]) is not int or not 1 <= body["expires_hours"] <= 72:
+            return 400, {"error": "invalid_team_invitation"}
+        try:
+            key = uuid.UUID(body["idempotency_key"])
+            if str(key) != body["idempotency_key"]:
+                raise ValueError()
+        except (ValueError, TypeError, AttributeError):
+            return 400, {"error": "invalid_team_invitation"}
+        existing = conn.execute("SELECT id,role,duration_hours,expires_at,accepted_at,revoked_at "
+                                "FROM hosting.team_invitations WHERE organization_id=%s AND idempotency_key=%s",
+                                (org_id, key)).fetchone()
+        if existing:
+            if (existing["role"], existing["duration_hours"]) != (body["role"], body["expires_hours"]):
+                return 409, {"error": "idempotency_conflict"}
+            # Never return a token again; its plaintext is not stored.
+            return 200, {"id": existing["id"], "expires_at": existing["expires_at"], "replayed": True}
+        token = secrets.token_urlsafe(32)
+        invitation_id = uuid.uuid4()
+        expires = conn.execute("INSERT INTO hosting.team_invitations "
+                               "(id,organization_id,token_hash,idempotency_key,role,duration_hours,issued_by,expires_at) "
+                               "VALUES (%s,%s,%s,%s,%s,%s,%s,now()+(%s * interval '1 hour')) "
+                               "RETURNING expires_at",
+                               (invitation_id, org_id, hashlib.sha256(token.encode()).digest(), key,
+                                body["role"], body["expires_hours"], actor, body["expires_hours"])).fetchone()
+        record(conn, org_id, actor, "team.invitation_created", invitation_id, request_id)
+        return 201, {"id": invitation_id, "token": token, "expires_at": expires["expires_at"],
+                     "role": body["role"], "request_id": request_id}
+
+    def accept_invitation(self, conn, actor, body, request_id):
+        token = body.get("token")
+        if set(body) != {"token"} or not isinstance(token, str) or \
+                not re.fullmatch(r"[A-Za-z0-9_-]{43}", token):
+            return 400, {"error": "invalid_invitation"}
+        digest = hashlib.sha256(token.encode()).digest()
+        row = conn.execute("SELECT * FROM hosting.accept_team_invitation(%s)", (digest,)).fetchone()
+        if not row:
+            return 409, {"error": "invitation_unavailable"}
+        if not row["replayed"]:
+            record(conn, row["organization_id"], actor, "team.invitation_accepted",
+                   row["invitation_id"], request_id)
+        return 200, {"organization_id": row["organization_id"], "role": row["assigned_role"],
+                     "state": "JOINED", "replayed": row["replayed"], "request_id": request_id}
 
     def domains(self, conn, org_id, app_id, actor, body, method, request_id, verify=False):
         if verify and method != "POST":
@@ -426,6 +517,12 @@ class Handler(BaseHTTPRequestHandler):
                             (actor,),
                         ).fetchall()
                         result = (200, {"organizations": rows})
+                    elif path == "/v1/team/invitations/accept" and method == "POST":
+                        result = self.accept_invitation(conn, actor, body, request_id)
+                    elif match := re.fullmatch(r"/v1/organizations/([0-9a-f-]{36})/team/(invitations|invitations/revoke|members|members/remove)", path):
+                        action = {"invitations": "invitations", "invitations/revoke": "revoke",
+                                  "members": "members", "members/remove": "remove"}[match.group(2)]
+                        result = self.team(conn, uuid.UUID(match.group(1)), actor, body, method, request_id, action)
                     elif match := re.fullmatch(r"/v1/organizations/([0-9a-f-]{36})/projects", path):
                         org_id = uuid.UUID(match.group(1))
                         role = conn.execute(
