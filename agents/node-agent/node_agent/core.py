@@ -225,7 +225,7 @@ class Node:
         if set(data) != {"application_id", "release_id", "hostname", "port", "health_path"}:
             raise ValueError("Invalid route properties")
         app, release = str(uuid.UUID(data["application_id"])), str(uuid.UUID(data["release_id"]))
-        from .routing import route_document, valid_hostname
+        from .routing import route_toml, valid_hostname
         if app != data["application_id"] or release != data["release_id"] or not valid_hostname(data["hostname"]):
             raise ValueError("Invalid route identifiers")
         if type(data["port"]) is not int or not 1 <= data["port"] <= 65535 or not PATH.fullmatch(data["health_path"]):
@@ -242,14 +242,14 @@ class Node:
             running, ip = self.inspect(container)
             if not running or not ip or not self.health_probe(ip, data["port"], data["health_path"]):
                 raise OperationError("Route upstream is not healthy")
-            document = route_document(app, release, data["hostname"], container, data["port"])
-            route_file = self.routes_dir / (app + ".json")
+            document = route_toml(app, release, data["hostname"], container, data["port"])
+            route_file = self.routes_dir / (app + ".toml")
             with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.routes_dir,
                                              prefix=".route-", delete=False) as file:
                 temporary = Path(file.name)
                 try:
                     os.chmod(temporary, 0o600)
-                    json.dump(document, file, separators=(",", ":"))
+                    file.write(document)
                     file.flush()
                     os.fsync(file.fileno())
                 except Exception:
@@ -268,7 +268,7 @@ class Node:
             row = db.execute("SELECT release_id FROM routes WHERE application_id=?", (app,)).fetchone()
             if row and row["release_id"] != release:
                 raise OperationError("A different release owns the public route")
-            (self.routes_dir / (app + ".json")).unlink(missing_ok=True)
+            (self.routes_dir / (app + ".toml")).unlink(missing_ok=True)
             db.execute("DELETE FROM routes WHERE application_id=?", (app,))
         return {"application_id": app, "release_id": release, "state": "UNROUTED"}
 

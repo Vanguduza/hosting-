@@ -1,4 +1,5 @@
 import json
+import tomllib
 import sys
 import tempfile
 import unittest
@@ -111,8 +112,8 @@ class NodeTests(unittest.TestCase):
             route = {"application_id": first["application_id"], "release_id": first["release_id"],
                      "hostname": "app.example.org", "port": 8080, "health_path": "/health"}
             self.assertEqual(node.route(route)["state"], "ROUTED")
-            route_file = node.routes_dir / (first["application_id"] + ".json")
-            document = json.loads(route_file.read_text())
+            route_file = node.routes_dir / (first["application_id"] + ".toml")
+            document = tomllib.loads(route_file.read_text())
             self.assertEqual(document["http"]["middlewares"]["app-" + first["application_id"] + "-receipt"]
                              ["headers"]["customResponseHeaders"]["X-Dial-Release"], first["release_id"])
             before = route_file.read_bytes()

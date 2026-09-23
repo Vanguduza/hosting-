@@ -14,7 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "agents/node-agent"))
-from node_agent.routing import route_document
+from node_agent.routing import route_toml
 
 
 def docker(*args):
@@ -34,14 +34,15 @@ class IngressRuntime(unittest.TestCase):
         host = "app.example.org"
         with tempfile.TemporaryDirectory(prefix="dial-ingress-test-") as directory:
             root = Path(directory)
+            (root / "routes").mkdir()
+            (root / "certs").mkdir()
             subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
                             "-days", "1", "-subj", "/CN=" + host,
                             "-addext", "subjectAltName=DNS:" + host,
-                            "-keyout", str(root / "tls.key"), "-out", str(root / "tls.crt")],
+                            "-keyout", str(root / "certs/tls.key"), "-out", str(root / "certs/tls.crt")],
                            check=True, capture_output=True, timeout=30)
-            (root / "app.json").write_text(json.dumps(route_document(app, release, host, app_container, 8080)))
-            (root / "cert.json").write_text(json.dumps({"tls": {"certificates": [{
-                "certFile": "/routes/tls.crt", "keyFile": "/routes/tls.key"}]}}))
+            (root / "routes/app.toml").write_text(route_toml(app, release, host, app_container, 8080))
+            (root / "routes/cert.toml").write_text('[[tls.certificates]]\ncertFile = "/certs/tls.crt"\nkeyFile = "/certs/tls.key"\n')
             with socket.socket() as port_socket:
                 port_socket.bind(("127.0.0.1", 0))
                 port = port_socket.getsockname()[1]
@@ -52,7 +53,8 @@ class IngressRuntime(unittest.TestCase):
                        "--label", "dial.application=" + app, "--label", "dial.release=" + release,
                        os.environ["NODE_RUNTIME_TEST_IMAGE"])
                 docker("run", "-d", "--name", ingress_container, "--network", "dial-runtime",
-                       "-p", f"127.0.0.1:{port}:443", "-v", str(root) + ":/routes:ro",
+                       "-p", f"127.0.0.1:{port}:443", "-v", str(root / "routes") + ":/routes:ro",
+                       "-v", str(root / "certs") + ":/certs:ro",
                        os.environ["INGRESS_TEST_IMAGE"],
                        "--providers.file.directory=/routes", "--providers.file.watch=true",
                        "--log.level=DEBUG",
@@ -60,7 +62,7 @@ class IngressRuntime(unittest.TestCase):
                        "--certificatesresolvers.acme.acme.email=ci@example.org",
                        "--certificatesresolvers.acme.acme.storage=/tmp/acme.json",
                        "--certificatesresolvers.acme.acme.httpchallenge.entrypoint=web")
-                context = ssl.create_default_context(cafile=str(root / "tls.crt"))
+                context = ssl.create_default_context(cafile=str(root / "certs/tls.crt"))
                 deadline = time.monotonic() + 12
                 while True:
                     try:

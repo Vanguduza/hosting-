@@ -1,4 +1,5 @@
 """Render file-provider configuration from constrained, typed route fields."""
+import json
 import re
 
 
@@ -18,3 +19,21 @@ def route_document(app, release, host, container, port):
                      "services": {name: {"loadBalancer": {"servers": [{"url": "http://" + container + ":" + str(port)}]}}},
                      "middlewares": {name + "-receipt": {"headers": {"customResponseHeaders": {
                          "X-Dial-Release": release}}}}}}
+
+
+def route_toml(app, release, host, container, port):
+    """Traefik's file provider reads TOML/YAML, not JSON route documents."""
+    name = "app-" + app
+    value = lambda text: json.dumps(text)
+    return (f'[http.routers.{value(name)}]\n'
+            f'rule = {value("Host(`" + host + "`)")}\n'
+            'entryPoints = ["websecure"]\n'
+            f'service = {value(name)}\n'
+            f'middlewares = [{value(name + "-receipt")}]\n'
+            f'[http.routers.{value(name)}.tls]\n'
+            'certResolver = "acme"\n'
+            f'[http.services.{value(name)}.loadBalancer]\n'
+            f'[[http.services.{value(name)}.loadBalancer.servers]]\n'
+            f'url = {value("http://" + container + ":" + str(port))}\n'
+            f'[http.middlewares.{value(name + "-receipt")}.headers.customResponseHeaders]\n'
+            f'"X-Dial-Release" = {value(release)}\n')
