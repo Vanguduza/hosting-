@@ -96,7 +96,8 @@ jobs:
         with:
           python-version: '3.13'
       - run: docker pull valkey/valkey:9
-      - run: echo "VALKEY_RUNTIME_IMAGE=$(docker image inspect valkey/valkey:9 --format '{{index .RepoDigests 0}}')" >> "$GITHUB_ENV"
+      - run: |
+          echo "VALKEY_RUNTIME_IMAGE=valkey/valkey:9@sha256:$(docker image inspect valkey/valkey:9 --format '{{index .RepoDigests 0}}' | cut -d: -f2)" >> "$GITHUB_ENV"
       - run: docker run -d --name dial-vk-ci-registry -p 127.0.0.1:5000:5000 registry:3
       - run: docker build -t 127.0.0.1:5000/dial-ci/vk-web:test tests/fixtures/web
       - run: docker push 127.0.0.1:5000/dial-ci/vk-web:test
