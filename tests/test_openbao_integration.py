@@ -21,7 +21,7 @@ def docker(*args):
     result = subprocess.run(["docker", *args], capture_output=True, text=True, timeout=180)
     if result.returncode:
         raise RuntimeError("Disposable OpenBao container failed: " + " ".join(args[:3]) + ": " + result.stderr[-500:])
-    return result.stdout
+    return result.stdout + result.stderr if args[0] == "logs" else result.stdout
 
 
 @unittest.skipUnless(os.environ.get("OPENBAO_TEST_IMAGE"), "requires disposable OpenBao TLS container")
@@ -41,8 +41,13 @@ class OpenBaoIntegration(unittest.TestCase):
                         docker("cp", name + ":/tmp/dial-ci-certs", str(root / "certs"))
                         break
                     except RuntimeError:
+                        status = docker("inspect", "-f", "{{.State.Status}}", name).strip()
+                        if status == "exited":
+                            logs = docker("logs", name).replace("disposable-ci-root", "[redacted]")
+                            raise RuntimeError("OpenBao dev server exited: " + logs[-2500:]) from None
                         if time.monotonic() > deadline:
-                            raise
+                            logs = docker("logs", name).replace("disposable-ci-root", "[redacted]")
+                            raise RuntimeError("OpenBao dev certificate directory absent: " + logs[-2500:]) from None
                         time.sleep(1)
                 candidates = [path for path in (root / "certs").rglob("*") if path.is_file()
                               and b"BEGIN CERTIFICATE" in path.read_bytes() and "ca" in path.name.lower()]
