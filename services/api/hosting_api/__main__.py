@@ -260,6 +260,22 @@ class Handler(BaseHTTPRequestHandler):
         record(conn, org_id, actor, "application.create", app_id, request_id)
         return 201, {"id": app_id, "request_id": request_id}
 
+    def builds(self, conn, org_id, app_id, actor, method):
+        if method != "GET" or not allowed(self.membership(conn, org_id, actor), "release:read"):
+            return 404, {"error": "not_found"}
+        app = conn.execute("SELECT id FROM hosting.applications WHERE organization_id=%s AND id=%s",
+                           (org_id, app_id)).fetchone()
+        if not app:
+            return 404, {"error": "not_found"}
+        rows = conn.execute(
+            "SELECT b.delivery_id,b.source_commit,b.state,b.attempts,b.image,b.last_error,b.created_at,"
+            "s.id AS source_id,s.full_name,s.branch FROM hosting.github_builds b "
+            "JOIN hosting.git_sources s ON s.id=b.source_id "
+            "WHERE s.organization_id=%s AND s.application_id=%s "
+            "ORDER BY b.created_at DESC,b.delivery_id DESC LIMIT 100", (org_id, app_id),
+        ).fetchall()
+        return 200, {"builds": rows}
+
     def releases(self, conn, org_id, app_id, actor, body, method, request_id, rollback_of=None):
         role = self.membership(conn, org_id, actor)
         if not allowed(role, "release:read" if method == "GET" else "release:create"):
@@ -563,6 +579,9 @@ class Handler(BaseHTTPRequestHandler):
                     elif match := re.fullmatch(r"/v1/organizations/([0-9a-f-]{36})/applications/([0-9a-f-]{36})/valkey", path):
                         result = self.valkey(conn, uuid.UUID(match.group(1)), uuid.UUID(match.group(2)),
                                              actor, body, method, request_id)
+                    elif match := re.fullmatch(r"/v1/organizations/([0-9a-f-]{36})/applications/([0-9a-f-]{36})/builds", path):
+                        result = self.builds(conn, uuid.UUID(match.group(1)), uuid.UUID(match.group(2)),
+                                             actor, method)
                     elif match := re.fullmatch(r"/v1/organizations/([0-9a-f-]{36})/applications/([0-9a-f-]{36})/releases", path):
                         result = self.releases(conn, uuid.UUID(match.group(1)), uuid.UUID(match.group(2)),
                                                actor, body, method, request_id)

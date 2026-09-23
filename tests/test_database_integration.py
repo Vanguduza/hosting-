@@ -448,6 +448,24 @@ class DatabaseIntegration(unittest.TestCase):
             with self.assertRaises(psycopg.errors.InsufficientPrivilege):
                 with conn.transaction():
                     conn.execute("UPDATE hosting.github_builds SET state='ADMITTED' WHERE delivery_id=%s", (delivery,))
+        handler = Handler.__new__(Handler)
+        with psycopg.connect(self.admin) as conn:
+            conn.execute("INSERT INTO hosting.memberships(organization_id,actor_sub,role) "
+                         "VALUES (%s,'charlie','viewer')", (self.org_a,))
+        with psycopg.connect(self.api, row_factory=dict_row) as conn:
+            with conn.transaction():
+                conn.execute("SELECT set_config('hosting.actor_sub','alice',true)")
+                status, listing = handler.builds(conn, self.org_a, app, "alice", "GET")
+                self.assertEqual((status, listing["builds"][0]["state"]), (200, "QUEUED"))
+                self.assertEqual(handler.builds(conn, self.org_b, app, "alice", "GET")[0], 404)
+                self.assertEqual(handler.builds(conn, self.org_a, app, "alice", "POST")[0], 404)
+            with conn.transaction():
+                conn.execute("SELECT set_config('hosting.actor_sub','bob',true)")
+                self.assertEqual(conn.execute("SELECT delivery_id FROM hosting.github_builds").fetchall(), [])
+                self.assertEqual(handler.builds(conn, self.org_a, app, "bob", "GET")[0], 404)
+            with conn.transaction():
+                conn.execute("SELECT set_config('hosting.actor_sub','charlie',true)")
+                self.assertEqual(handler.builds(conn, self.org_a, app, "charlie", "GET")[0], 200)
         with psycopg.connect(os.environ["TEST_BUILDWORKER_DSN"], row_factory=dict_row,
                              autocommit=True) as conn:
             job, registered, attempt = claim_build(conn)
@@ -469,6 +487,11 @@ class DatabaseIntegration(unittest.TestCase):
         with psycopg.connect(self.admin) as conn:
             self.assertEqual(conn.execute("SELECT state,image FROM hosting.github_builds WHERE delivery_id=%s",
                                           (delivery,)).fetchone(), ("ADMITTED", image))
+        with psycopg.connect(self.api, row_factory=dict_row) as conn:
+            with conn.transaction():
+                conn.execute("SELECT set_config('hosting.actor_sub','alice',true)")
+                status, listing = handler.builds(conn, self.org_a, app, "alice", "GET")
+                self.assertEqual((status, listing["builds"][0]["image"]), (200, image))
 
 
 if __name__ == "__main__":

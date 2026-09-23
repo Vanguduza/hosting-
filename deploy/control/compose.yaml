@@ -19,6 +19,7 @@ services:
       - ../../services/api/schema/007_team.sql:/docker-entrypoint-initdb.d/07_team.sql:ro
       - ../../services/api/schema/008_admission.sql:/docker-entrypoint-initdb.d/08_admission.sql:ro
       - ../../services/api/schema/009_github_builds.sql:/docker-entrypoint-initdb.d/09_github_builds.sql:ro
+      - ../../services/api/schema/010_build_visibility.sql:/docker-entrypoint-initdb.d/10_build_visibility.sql:ro
     healthcheck:
       test: [CMD-SHELL, 'pg_isready -U postgres -d hosting']
       interval: 10s
