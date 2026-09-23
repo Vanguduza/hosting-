@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT / "agents/node-agent"))
 from node_agent.core import Node, OperationError
 from node_agent.postgres import names, provision
 sys.path.insert(0, str(ROOT / "tools"))
-from postgres_backup import backup, restore_drill, configuration, run
+from postgres_backup import backup, restore_drill, backup_all, configuration, run
 
 
 @unittest.skipUnless(os.environ.get("POSTGRES_RUNTIME_IMAGE"), "requires disposable Docker PostgreSQL image")
@@ -73,6 +73,10 @@ class PostgresRuntime(unittest.TestCase):
                         verified = restore_drill(instance, snapshot["snapshot_id"], directory, image)
                         self.assertEqual(verified["state"], "RESTORE_VERIFIED")
                         self.assertGreaterEqual(verified["restored_table_count"], 1)
+                        fleet = backup_all(directory, image)
+                        self.assertEqual(fleet["state"], "FLEET_BACKUP_VERIFIED")
+                        self.assertEqual(fleet["instances"], 1)
+                        self.assertEqual(fleet["receipts"][0]["instance_id"], instance)
                     finally:
                         for key, value in backup_env.items():
                             if value is None:

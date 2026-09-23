@@ -8,6 +8,7 @@ Wants=network-online.target
 Type=oneshot
 User=root
 EnvironmentFile=/etc/dial-hosting/postgres-backup.env
+Environment=TMPDIR=/var/lib/dial-hosting/backup/tmp
 ExecStart=/usr/bin/python3 /opt/dial-hosting/postgres_backup.py backup-all
 WorkingDirectory=/var/lib/dial-hosting/backup
 UMask=0077
