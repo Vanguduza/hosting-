@@ -133,6 +133,9 @@ def restore_drill(instance, snapshot, evidence, image):
         archives = [p for p in Path(temp).rglob("database.dump") if p.is_file() and not p.is_symlink()]
         if len(archives) != 1 or digest(archives[0]) != receipt["archive_sha256"]:
             raise RuntimeError("Restored archive differs from snapshot evidence")
+        # Docker cp cannot write into a read-only root filesystem. Bind this
+        # verified archive read-only; the host directory remains owner-only.
+        os.chmod(archives[0], 0o644)
         password = Path(temp) / "drill_password"
         password.write_text(uuid.uuid4().hex + uuid.uuid4().hex)
         os.chmod(password, 0o600)
@@ -147,6 +150,7 @@ def restore_drill(instance, snapshot, evidence, image):
                  "--tmpfs=/tmp:rw,nosuid,size=512m", "--tmpfs=/var/run/postgresql:rw,nosuid,size=16m",
                  "--mount", "type=volume,src=" + volume + ",dst=/var/lib/postgresql/data",
                  "--mount", "type=bind,src=" + str(password) + ",dst=/run/secrets/drill_password,readonly",
+                 "--mount", "type=bind,src=" + str(archives[0]) + ",dst=/tmp/database.dump,readonly",
                  "-e", "PGDATA=/var/lib/postgresql/data/pgdata", "-e", "POSTGRES_DB=appdb",
                  "-e", "POSTGRES_PASSWORD_FILE=/run/secrets/drill_password", image], 120)
             created_container = True
@@ -159,8 +163,6 @@ def restore_drill(instance, snapshot, evidence, image):
                     time.sleep(2)
             else:
                 raise RuntimeError("Isolated restore PostgreSQL did not start")
-            run(["docker", "cp", str(archives[0]), container + ":/tmp/database.dump"], 120)
-            run(["docker", "exec", "-u", "0", container, "chmod", "0644", "/tmp/database.dump"], 15)
             run(["docker", "exec", "-u", "postgres", container, "pg_restore", "--exit-on-error",
                  "--no-owner", "--no-acl", "-U", "postgres", "-d", "appdb", "/tmp/database.dump"], 3600)
             count = int(run(["docker", "exec", "-u", "postgres", container, "psql", "-X", "-At",
@@ -194,12 +196,27 @@ def backup_all(evidence, image):
     try:
         fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         names = run(["docker", "ps", "-a", "--filter", "label=dial.postgres", "--format", "{{.Names}}"], 30).splitlines()
-        results = []
-        for name in sorted(names):
+        volumes = run(["docker", "volume", "ls", "--filter", "label=dial.postgres",
+                       "--format", "{{.Name}}"], 30).splitlines()
+        inventory = set()
+        for volume in volumes:
+            match = re.fullmatch(r"dial-pg-data-([a-f0-9-]{36})", volume)
+            if not match:
+                raise RuntimeError("Unexpected PostgreSQL-labeled volume in inventory")
+            inventory.add(ident(match.group(1)))
+        found = set()
+        for name in names:
             match = re.fullmatch(r"dial-pg-([a-f0-9-]{36})", name)
             if not match:
                 raise RuntimeError("Unexpected PostgreSQL-labeled container in inventory")
             instance = ident(match.group(1))
+            if instance not in inventory:
+                raise RuntimeError("PostgreSQL container has no matching labeled volume")
+            found.add(instance)
+        if found != inventory:
+            raise RuntimeError("PostgreSQL volume exists without a running or stopped owned container")
+        results = []
+        for instance in sorted(found):
             snapshot = backup(instance, evidence)
             results.append(restore_drill(instance, snapshot["snapshot_id"], evidence, image))
         return {"state": "FLEET_BACKUP_VERIFIED", "instances": len(results),
