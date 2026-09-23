@@ -1,0 +1,48 @@
+name: dial-hosting-control-dev
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: hosting
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_admin
+    secrets: [pg_admin, pg_api]
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./00_create_api_role.sh:/docker-entrypoint-initdb.d/00_create_api_role.sh:ro
+      - ../../services/api/schema/001_control.sql:/docker-entrypoint-initdb.d/01_control.sql:ro
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U postgres -d hosting']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [backend]
+    restart: unless-stopped
+  api:
+    build: ../../services/api
+    environment:
+      DB_HOST: db
+      DB_NAME: hosting
+      DB_USER: hosting_api
+      DB_PASSWORD_FILE: /run/secrets/pg_api
+      OIDC_ISSUER: ${OIDC_ISSUER:?Configure a real OIDC issuer}
+      OIDC_AUDIENCE: ${OIDC_AUDIENCE:?Configure a dedicated API audience}
+      OIDC_JWKS_URL: ${OIDC_JWKS_URL:?Configure a real HTTPS JWKS URL}
+    secrets: [pg_api]
+    depends_on:
+      db: {condition: service_healthy}
+    ports: ['127.0.0.1:8080:8080']
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    networks: [backend, egress]
+    restart: unless-stopped
+networks:
+  backend: {internal: true}
+  egress: {}
+volumes:
+  pg_data: {}
+secrets:
+  pg_admin: {file: ./.secrets/pg_admin}
+  pg_api: {file: ./.secrets/pg_api}
