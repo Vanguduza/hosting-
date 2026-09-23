@@ -154,6 +154,8 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError()
         except (ValueError, TypeError, AttributeError):
             return 400, {"error": "invalid_team_invitation"}
+        conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,2))",
+                     (str(org_id) + "/" + str(key),))
         existing = conn.execute("SELECT id,role,duration_hours,expires_at,accepted_at,revoked_at "
                                 "FROM hosting.team_invitations WHERE organization_id=%s AND idempotency_key=%s",
                                 (org_id, key)).fetchone()

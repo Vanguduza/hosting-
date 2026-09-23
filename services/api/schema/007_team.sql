@@ -1,5 +1,6 @@
 -- One-time, bounded capability invitations for OIDC subjects. The token is
 -- returned once; only its SHA-256 digest is stored in the control database.
+ALTER DEFAULT PRIVILEGES REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
 CREATE TABLE hosting.team_invitations (
   id uuid PRIMARY KEY,
   organization_id uuid NOT NULL REFERENCES hosting.organizations(id),
@@ -61,7 +62,7 @@ BEGIN
     RETURN;
   END IF;
   SELECT * INTO invite FROM hosting.team_invitations t WHERE t.token_hash=p_hash FOR UPDATE;
-  IF NOT FOUND OR invite.revoked_at IS NOT NULL OR invite.expires_at<=now() THEN
+  IF NOT FOUND OR invite.revoked_at IS NOT NULL OR invite.expires_at<=clock_timestamp() THEN
     RETURN;
   END IF;
   IF invite.accepted_by IS NOT NULL THEN
