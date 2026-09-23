@@ -36,6 +36,7 @@ class ValkeyRuntime(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             node = Node(Path(temp) / "state.sqlite3")
             instance, app, release = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+            foreign_app, foreign_release = str(uuid.uuid4()), str(uuid.uuid4())
             password = "A" * 48
             node.deliver_secrets({"resource_id": instance, "version": 1,
                                   "values": {"app_password": password}})
@@ -66,6 +67,26 @@ class ValkeyRuntime(unittest.TestCase):
                 self.assertIn(network, workload["NetworkSettings"]["Networks"])
                 self.assertIn(node.application_network(app), workload["NetworkSettings"]["Networks"])
                 self.assertIn("CACHE_PASSWORD_FILE=/run/secrets/valkey_password", workload["Config"]["Env"])
+                client_script = (
+                    "import os,socket; "
+                    "p=open(os.environ['CACHE_PASSWORD_FILE']).read().encode(); "
+                    "s=socket.create_connection((os.environ['CACHE_HOST'],6379),3); "
+                    "s.sendall(b'*3\\r\\n$4\\r\\nAUTH\\r\\n$8\\r\\ndial_app\\r\\n$'+"
+                    "str(len(p)).encode()+b'\\r\\n'+p+b'\\r\\n'); "
+                    "assert s.recv(128)==b'+OK\\r\\n'; "
+                    "s.sendall(b'*1\\r\\n$4\\r\\nPING\\r\\n'); "
+                    "assert s.recv(128)==b'+PONG\\r\\n'")
+                subprocess.run(["docker", "exec", node.container(release), "python", "-c", client_script],
+                               check=True, capture_output=True)
+                node.deploy({"operation_id": str(uuid.uuid4()), "application_id": foreign_app,
+                             "release_id": foreign_release, "image": os.environ["VALKEY_RUNTIME_WEB_IMAGE"],
+                             "port": 8080, "health_path": "/health", "memory_mb": 128, "cpu_milli": 100})
+                foreign = json.loads(subprocess.check_output(["docker", "inspect", node.container(foreign_release)]))[0]
+                self.assertNotIn(network, foreign["NetworkSettings"]["Networks"])
+                lookup = subprocess.run(["docker", "exec", node.container(foreign_release), "python", "-c",
+                                         "import socket; socket.getaddrinfo('" + container + "',6379)"],
+                                        capture_output=True)
+                self.assertNotEqual(lookup.returncode, 0)
                 self.assertEqual(provision(node, payload), ready)
                 time.sleep(2)  # Let appendfsync everysec persist the acknowledged write.
                 subprocess.run(["docker", "restart", container], check=True, capture_output=True)
@@ -75,9 +96,12 @@ class ValkeyRuntime(unittest.TestCase):
                     provision(node, {**payload, "application_id": str(uuid.uuid4())})
             finally:
                 subprocess.run(["docker", "rm", "-f", node.container(release)], capture_output=True)
+                subprocess.run(["docker", "rm", "-f", node.container(foreign_release)], capture_output=True)
                 subprocess.run(["docker", "rm", "-f", container], capture_output=True)
                 subprocess.run(["docker", "volume", "rm", volume], capture_output=True)
                 subprocess.run(["docker", "network", "rm", network], capture_output=True)
+                subprocess.run(["docker", "network", "rm", node.application_network(app)], capture_output=True)
+                subprocess.run(["docker", "network", "rm", node.application_network(foreign_app)], capture_output=True)
                 if previous is None:
                     os.environ.pop("NODE_VALKEY_IMAGE", None)
                 else:
