@@ -1,0 +1,93 @@
+import json
+import sys
+import tempfile
+import unittest
+import uuid
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "agents/node-agent"))
+from node_agent.core import Node, OperationError, valid
+
+
+def request(**updates):
+    data = {"operation_id": str(uuid.uuid4()), "application_id": str(uuid.uuid4()),
+            "release_id": str(uuid.uuid4()), "image": "registry.example.test/team/app@sha256:" + "a" * 64,
+            "port": 8080, "health_path": "/health", "memory_mb": 128, "cpu_milli": 100}
+    data.update(updates)
+    return data
+
+
+class DockerFixture:
+    def __init__(self):
+        self.containers = {}
+        self.calls = []
+
+    def __call__(self, args, timeout):
+        self.calls.append(args)
+        if args[1:3] == ["network", "inspect"]:
+            return "[]"
+        if args[1] == "inspect":
+            if args[2] not in self.containers:
+                raise OperationError("absent")
+            return json.dumps([{"State": {"Running": True}, "NetworkSettings": {"Networks": {
+                "dial-runtime": {"IPAddress": "172.22.0.2"}}}, "Config": {"Labels": self.containers[args[2]]}}])
+        if args[1] == "run":
+            labels = [args[index + 1] for index, value in enumerate(args) if value == "--label"]
+            self.containers[args[args.index("--name") + 1]] = dict(label.split("=", 1) for label in labels)
+        if args[1:3] == ["rm", "-f"]:
+            self.containers.pop(args[3], None)
+        return "ok"
+
+
+class NodeTests(unittest.TestCase):
+    def test_reject_mutable_or_privileged_input(self):
+        for change in ({"image": "registry.example.test/app:latest"},
+                       {"port": True}, {"health_path": "//evil.example"},
+                       {"privileged": True}, {"memory_mb": 0}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                valid(request(**change))
+
+    def test_replay_and_failed_update_preserve_active(self):
+        fixture = DockerFixture()
+        with tempfile.TemporaryDirectory() as directory:
+            node = Node(Path(directory) / "agent.sqlite3", runner=fixture,
+                        health_probe=lambda ip, port, path: True)
+            first = request()
+            receipt = node.deploy(first)
+            self.assertEqual(receipt["state"], "HEALTHY_PRIVATE")
+            before = len(fixture.calls)
+            self.assertEqual(node.deploy(first), receipt)
+            self.assertEqual(len(fixture.calls), before)
+            with self.assertRaises(OperationError):
+                node.deploy({**first, "image": first["image"].replace("a" * 64, "b" * 64)})
+            self.assertEqual(node.observed(first["application_id"])["release_id"], first["release_id"])
+
+    def test_old_container_retained_until_explicit_retirement(self):
+        fixture = DockerFixture()
+        with tempfile.TemporaryDirectory() as directory:
+            node = Node(Path(directory) / "agent.sqlite3", runner=fixture,
+                        health_probe=lambda ip, port, path: True)
+            first = request()
+            node.deploy(first)
+            with self.assertRaises(OperationError):
+                node.retire(first["application_id"], first["release_id"])
+            second = request(application_id=first["application_id"])
+            node.deploy(second)
+            promoted = second["release_id"]
+            self.assertIn(Node.container(first["release_id"]), fixture.containers)
+            self.assertEqual(node.retire(first["application_id"], first["release_id"])["state"], "RETIRED")
+            self.assertNotIn(Node.container(first["release_id"]), fixture.containers)
+            self.assertEqual(node.retire(first["application_id"], first["release_id"])["state"], "RETIRED")
+            node.health_probe = lambda ip, port, path: False
+            second = request(application_id=first["application_id"])
+            # Avoid a 90-second timeout while asserting the current release survives.
+            import unittest.mock as mock
+            with mock.patch("node_agent.core.time.monotonic", side_effect=[0, 91]):
+                with self.assertRaises(OperationError):
+                    node.deploy(second)
+            self.assertEqual(node.observed(first["application_id"])["release_id"], promoted)
+
+
+if __name__ == "__main__":
+    unittest.main()

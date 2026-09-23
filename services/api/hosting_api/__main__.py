@@ -10,7 +10,7 @@ import psycopg
 from psycopg.conninfo import make_conninfo
 from psycopg.rows import dict_row
 
-from .policy import allowed, valid_name
+from .policy import allowed, valid_name, valid_release
 
 
 def environment():
@@ -90,6 +90,98 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         self.handle_request("POST")
 
+    def membership(self, conn, org_id, actor):
+        row = conn.execute(
+            "SELECT role FROM hosting.memberships WHERE organization_id=%s AND actor_sub=%s",
+            (org_id, actor),
+        ).fetchone()
+        return row["role"] if row else None
+
+    def applications(self, conn, org_id, project_id, actor, body, method, request_id):
+        role = self.membership(conn, org_id, actor)
+        if not allowed(role, "application:read" if method == "GET" else "application:create"):
+            return 404, {"error": "not_found"}
+        project = conn.execute("SELECT id FROM hosting.projects WHERE organization_id=%s AND id=%s",
+                               (org_id, project_id)).fetchone()
+        if not project:
+            return 404, {"error": "not_found"}
+        if method == "GET":
+            rows = conn.execute(
+                "SELECT id,name,environment,active_release_id,created_at FROM hosting.applications "
+                "WHERE organization_id=%s AND project_id=%s ORDER BY created_at DESC LIMIT 100",
+                (org_id, project_id),
+            ).fetchall()
+            return 200, {"applications": rows}
+        if set(body) != {"name", "environment"} or not valid_name(body["name"]) or not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", str(body["environment"])):
+            return 400, {"error": "invalid_application"}
+        app_id = uuid.uuid4()
+        conn.execute("INSERT INTO hosting.applications(id,organization_id,project_id,name,environment) VALUES (%s,%s,%s,%s,%s)",
+                     (app_id, org_id, project_id, body["name"], body["environment"]))
+        record(conn, org_id, actor, "application.create", app_id, request_id)
+        return 201, {"id": app_id, "request_id": request_id}
+
+    def releases(self, conn, org_id, app_id, actor, body, method, request_id):
+        role = self.membership(conn, org_id, actor)
+        if not allowed(role, "release:read" if method == "GET" else "release:create"):
+            return 404, {"error": "not_found"}
+        app = conn.execute("SELECT id,active_release_id FROM hosting.applications WHERE organization_id=%s AND id=%s",
+                           (org_id, app_id)).fetchone()
+        if not app:
+            return 404, {"error": "not_found"}
+        if method == "GET":
+            rows = conn.execute(
+                "SELECT id,image,state,node_id,created_at FROM hosting.releases "
+                "WHERE organization_id=%s AND application_id=%s ORDER BY created_at DESC LIMIT 100",
+                (org_id, app_id),
+            ).fetchall()
+            return 200, {"releases": rows}
+        if not valid_release(body):
+            return 400, {"error": "invalid_release"}
+        conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 1))", (str(app_id),))
+        app = conn.execute("SELECT active_release_id FROM hosting.applications WHERE id=%s", (app_id,)).fetchone()
+        existing = conn.execute(
+            "SELECT id,state FROM hosting.releases WHERE organization_id=%s AND application_id=%s AND idempotency_key=%s",
+            (org_id, app_id, body["idempotency_key"]),
+        ).fetchone()
+        if existing:
+            return 200, {"id": existing["id"], "state": existing["state"], "replayed": True}
+        pending = conn.execute("SELECT 1 FROM hosting.releases WHERE application_id=%s AND state IN ('QUEUED','DEPLOYING')",
+                               (app_id,)).fetchone()
+        if pending:
+            return 409, {"error": "release_in_progress"}
+        admitted = conn.execute("SELECT 1 FROM hosting.artifact_admissions WHERE image=%s", (body["image"],)).fetchone()
+        if not admitted:
+            return 409, {"error": "artifact_not_admitted"}
+        previous_node = None
+        if app["active_release_id"]:
+            previous = conn.execute("SELECT node_id FROM hosting.releases WHERE id=%s",
+                                    (app["active_release_id"],)).fetchone()
+            previous_node = previous["node_id"]
+        node = conn.execute(
+            "SELECT id FROM hosting.nodes WHERE enabled AND observed_at > now() - interval '5 minutes' "
+            "AND cpu_milli-reserved_cpu_milli >= %s AND memory_mb-reserved_memory_mb >= %s "
+            "AND (%s::uuid IS NULL OR id=%s::uuid) "
+            "ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1",
+            (body["cpu_milli"], body["memory_mb"], previous_node, previous_node),
+        ).fetchone()
+        if not node:
+            return 409, {"error": "capacity_unavailable"}
+        conn.execute("UPDATE hosting.nodes SET reserved_cpu_milli=reserved_cpu_milli+%s, "
+                     "reserved_memory_mb=reserved_memory_mb+%s WHERE id=%s",
+                     (body["cpu_milli"], body["memory_mb"], node["id"]))
+        release_id, job_id = uuid.uuid4(), uuid.uuid4()
+        conn.execute(
+            "INSERT INTO hosting.releases(id,organization_id,application_id,node_id,requested_by,idempotency_key,"
+            "image,port,health_path,memory_mb,cpu_milli,previous_release_id) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (release_id, org_id, app_id, node["id"], actor, body["idempotency_key"], body["image"],
+             body["port"], body["health_path"], body["memory_mb"], body["cpu_milli"], app["active_release_id"]),
+        )
+        conn.execute("INSERT INTO hosting.jobs(id,organization_id,release_id) VALUES (%s,%s,%s)",
+                     (job_id, org_id, release_id))
+        record(conn, org_id, actor, "release.queue", release_id, request_id)
+        return 202, {"id": release_id, "job_id": job_id, "state": "QUEUED", "request_id": request_id}
+
     def handle_request(self, method):
         path = urlsplit(self.path).path
         if path == "/live" and method == "GET":
@@ -146,6 +238,12 @@ class Handler(BaseHTTPRequestHandler):
                                 )
                                 record(conn, org_id, actor, "project.create", project_id, request_id)
                                 result = (201, {"id": project_id, "name": name, "request_id": request_id})
+                    elif match := re.fullmatch(r"/v1/organizations/([0-9a-f-]{36})/projects/([0-9a-f-]{36})/applications", path):
+                        result = self.applications(conn, uuid.UUID(match.group(1)), uuid.UUID(match.group(2)),
+                                                   actor, body, method, request_id)
+                    elif match := re.fullmatch(r"/v1/organizations/([0-9a-f-]{36})/applications/([0-9a-f-]{36})/releases", path):
+                        result = self.releases(conn, uuid.UUID(match.group(1)), uuid.UUID(match.group(2)),
+                                               actor, body, method, request_id)
                     else:
                         result = (404, {"error": "not_found"})
             return self.reply(*result)

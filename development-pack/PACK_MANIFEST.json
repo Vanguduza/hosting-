@@ -10,7 +10,7 @@
   "runtime_qualified": false,
   "production_qualified": false,
   "owner_accepted": false,
-  "partial_units": ["DU-001", "DU-002", "DU-004", "DU-006"],
+  "partial_units": ["DU-001", "DU-002", "DU-004", "DU-006", "DU-009", "DU-010", "DU-011", "DU-012", "DU-013", "DU-019", "DU-021", "DU-022", "DU-023", "DU-024"],
   "implementation_state": "PARTIAL_UNVERIFIED",
   "blocked_external": ["placement", "provider credentials", "production domains", "offsite backup target", "runtime certification"]
 }

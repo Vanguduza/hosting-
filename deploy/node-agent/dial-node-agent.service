@@ -1,0 +1,30 @@
+[Unit]
+Description=DIAL typed runtime node agent
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=dial-node
+Group=dial-node
+SupplementaryGroups=docker
+WorkingDirectory=/opt/dial-hosting/node-agent
+EnvironmentFile=/etc/dial-hosting/node-agent.env
+ExecStart=/usr/bin/python3 -m node_agent
+Restart=always
+RestartSec=5s
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+ReadWritePaths=/var/lib/dial-hosting/node-agent
+
+[Install]
+WantedBy=multi-user.target

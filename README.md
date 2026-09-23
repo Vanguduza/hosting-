@@ -4,7 +4,7 @@ This repository binds the DIAL hosting blueprint to source control and contains 
 
 ## Current certification
 
-`BUILD_READY=false`, `RUNTIME_QUALIFIED=false`, `PRODUCTION_QUALIFIED=false`. The repository contains working tenant/project intent and audit code, database schema, deterministic pack validation, and a local control-plane profile. Deployment, node agents, build, billing, managed Supabase, restores, and client portal have **not** been implemented or certified. A missing capability is omitted rather than represented by a fake route or green status.
+`BUILD_READY=false`, `RUNTIME_QUALIFIED=false`, `PRODUCTION_QUALIFIED=false`. The repository contains authenticated tenant/project/application APIs; private digest-admitted release scheduling and an mTLS Docker node agent; a durable worker with idempotent private health receipts and delayed old-release retirement; control-database backup and isolated restore drill tooling. Public ingress, full build automation, managed Supabase, hosted client data backups, billing, secrets, provider IAM setup and the client portal have **not** been implemented or certified. A missing capability is omitted rather than represented by a fake route or green status.
 
 ## Local control-plane verification
 
@@ -14,7 +14,7 @@ python3 -m unittest discover -s tests -v
 docker compose -f deploy/control/compose.yaml --env-file deploy/control/.env up --build
 ```
 
-The last command requires Docker, a real OIDC issuer, and the values described in [the control profile](deploy/control/README.md). No example credentials are active defaults. PostgreSQL is private to the Compose network. The HTTP API binds loopback; a TLS/identity-aware ingress is needed before remote access.
+The last command requires Docker, a real OIDC issuer, and the values described in [the control profile](deploy/control/README.md). The worker and agent have separate setup paths. No example credentials are active defaults. PostgreSQL is private to the Compose network. The HTTP API binds loopback; a TLS/identity-aware ingress is needed before remote access. See the [node agent](agents/node-agent/README.md) and [control backup](docs/BACKUP_AND_RESTORE.md) runbooks.
 
 ## Design boundaries
 
