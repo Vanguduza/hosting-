@@ -16,12 +16,16 @@ for name in pg_admin pg_api pg_worker pg_admitter pg_hook pg_buildworker github_
   openssl rand -hex 32 > "$secrets/$name"
   chmod 600 "$secrets/$name"
 done
+# Compose binds local files without remapping uid/mode. Serving containers
+# run as uid 10001; only their mounted role credentials belong to that uid.
+chown 10001:10001 "$secrets/pg_api" "$secrets/pg_hook" "$secrets/github_webhook"
 compose=(docker compose -f deploy/control/compose.yaml)
 cleanup() {
   "${compose[@]}" down --volumes --remove-orphans || true
   rm -rf -- "$secrets"
 }
 trap cleanup EXIT
+trap '"${compose[@]}" logs --no-color --tail=80 db migrate api github-webhook || true' ERR
 
 "${compose[@]}" up --build -d db migrate api github-webhook
 for i in {1..30}; do
