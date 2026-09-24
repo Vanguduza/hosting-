@@ -266,7 +266,8 @@ class Handler(BaseHTTPRequestHandler):
             return 404, {"error": "not_found"}
         conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,1))", (str(app_id),))
         app = conn.execute("SELECT traffic_state,traffic_reason,traffic_requested_by,traffic_updated_at,"
-                           "traffic_last_error FROM hosting.applications WHERE organization_id=%s AND id=%s",
+                           "traffic_last_error FROM hosting.applications WHERE organization_id=%s AND id=%s" +
+                           (" FOR UPDATE" if method == "POST" else ""),
                            (org_id, app_id)).fetchone()
         if not app:
             return 404, {"error": "not_found"}
