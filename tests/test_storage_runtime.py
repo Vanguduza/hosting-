@@ -1,5 +1,6 @@
 """Real Garage S3 proof: private network, signed object I/O and durable restart."""
 import json
+import http.client
 import os
 import subprocess
 import sys
@@ -48,7 +49,33 @@ class StorageRuntime(unittest.TestCase):
             try:
                 payload = {"instance_id": first, "application_id": app, "memory_mb": 256,
                            "cpu_milli": 250, "secret_version": 1}
-                receipt = provision(node, payload)
+                try:
+                    receipt = provision(node, payload)
+                except OperationError:
+                    failed = subprocess.run(["docker", "inspect", names(first)[0]], capture_output=True, text=True)
+                    if failed.returncode == 0:
+                        item = json.loads(failed.stdout)[0]
+                        state = item["State"]
+                        print("Garage state:", {key: state.get(key) for key in ("Status", "ExitCode", "Error")},
+                              file=sys.stderr)
+                        ip = item.get("NetworkSettings", {}).get("Networks", {}).get(names(first)[1], {}).get("IPAddress")
+                        if ip and state.get("Running"):
+                            try:
+                                connection = http.client.HTTPConnection(ip, 3900, timeout=3)
+                                connection.request("GET", "/" + bucket_name(first), headers={"Host": "localhost"})
+                                print("Garage unsigned HTTP:", connection.getresponse().status, file=sys.stderr)
+                                connection.close()
+                            except OSError as exc:
+                                print("Garage HTTP failure:", type(exc).__name__, file=sys.stderr)
+                            info = subprocess.run(["docker", "exec", names(first)[0], "/garage", "bucket", "info",
+                                                   bucket_name(first)], capture_output=True, text=True)
+                            print("Garage bucket info exit:", info.returncode, file=sys.stderr)
+                        log = subprocess.run(["docker", "logs", "--tail", "30", names(first)[0]],
+                                             capture_output=True, text=True).stderr[-4000:]
+                        for value in secret.values():
+                            log = log.replace(value, "[redacted]")
+                        print("Garage logs:", log, file=sys.stderr)
+                    raise
                 self.assertEqual((receipt["state"], receipt["bucket"]), ("READY_PRIVATE", bucket_name(first)))
                 provision(node, {**payload, "instance_id": second, "application_id": foreign_app})
                 item = json.loads(subprocess.check_output(["docker", "inspect", names(first)[0]]))[0]
