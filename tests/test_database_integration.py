@@ -8,8 +8,10 @@ import json
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import psycopg
@@ -18,7 +20,7 @@ from psycopg.rows import dict_row
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "services/api"))
 sys.path.insert(0, str(ROOT / "tools"))
-from hosting_api.__main__ import Handler, record, audit_after
+from hosting_api.__main__ import Handler, record, audit_after, capacity_window
 from hosting_api.worker import claim, finalize, sweep_retirements, sweep_failed, process_traffic_once
 from hosting_api.postgres_jobs import claim as claim_postgres, finalize as finalize_postgres
 from hosting_api.valkey_jobs import claim as claim_valkey, finalize as finalize_valkey
@@ -82,15 +84,73 @@ class DatabaseIntegration(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             destination = Path(temporary) / "schema"
             shutil.copytree(ROOT / "services/api/schema", destination)
-            (destination / "017_rollback_probe.sql").write_text(
+            (destination / "018_rollback_probe.sql").write_text(
                 "CREATE TABLE hosting.rollback_probe(id integer);\n"
                 "SELECT 1 / 0;\n", encoding="utf-8")
             with psycopg.connect(self.admin, autocommit=True) as conn:
                 with self.assertRaises(psycopg.errors.DivisionByZero):
                     apply_migrations(conn, destination)
                 self.assertIsNone(conn.execute("SELECT to_regclass('hosting.rollback_probe')").fetchone()[0])
-                self.assertEqual(conn.execute("SELECT count(*) FROM hosting.schema_migrations").fetchone()[0], 16)
+                self.assertEqual(conn.execute("SELECT count(*) FROM hosting.schema_migrations").fetchone()[0], 17)
                 verify_migrations(conn)
+
+    def test_capacity_reservation_intervals_are_tenant_scoped_and_close_once(self):
+        org, project, app, release, database = (uuid.uuid4() for _ in range(5))
+        actor, viewer = "meter-owner-" + org.hex, "meter-viewer-" + org.hex
+        start = datetime.now(timezone.utc)
+        with psycopg.connect(self.admin) as conn:
+            conn.execute("INSERT INTO hosting.organizations(id,name) VALUES (%s,'meter-test')", (org,))
+            conn.execute("INSERT INTO hosting.memberships(organization_id,actor_sub,role) "
+                         "VALUES (%s,%s,'owner'),(%s,%s,'viewer')", (org, actor, org, viewer))
+            conn.execute("INSERT INTO hosting.projects(id,organization_id,name) VALUES (%s,%s,'meter')", (project, org))
+            conn.execute("INSERT INTO hosting.applications(id,organization_id,project_id,environment,name) "
+                         "VALUES (%s,%s,%s,'production','meter')", (app, org, project))
+            conn.execute("INSERT INTO hosting.releases(id,organization_id,application_id,node_id,requested_by,"
+                         "idempotency_key,image,port,health_path,memory_mb,cpu_milli) "
+                         "VALUES (%s,%s,%s,%s,%s,%s,%s,8080,'/health',128,250)",
+                         (release, org, app, self.node, actor, uuid.uuid4(), self.image))
+            conn.execute("INSERT INTO hosting.postgres_instances(id,organization_id,application_id,node_id,"
+                         "requested_by,idempotency_key,memory_mb,cpu_milli) "
+                         "VALUES (%s,%s,%s,%s,%s,%s,512,500)",
+                         (database, org, app, self.node, actor, uuid.uuid4()))
+        time.sleep(.02)
+        handler = Handler.__new__(Handler)
+        with psycopg.connect(self.api, row_factory=dict_row) as conn:
+            with conn.transaction():
+                conn.execute("SELECT set_config('hosting.actor_sub',%s,true)", (actor,))
+                conn.execute("SELECT set_config('hosting.auth_kind','human',true)")
+                code, result = handler.capacity(conn, org, actor, (start, datetime.now(timezone.utc)))
+                self.assertEqual(code, 200)
+                amounts = {row["resource_type"]: row for row in result["allocations"]}
+                self.assertEqual(set(amounts), {"release", "postgres"})
+                self.assertEqual(amounts["release"]["reservations"], 1)
+                self.assertGreater(amounts["release"]["reserved_cpu_milli_ms"], 0)
+                self.assertGreater(amounts["postgres"]["reserved_memory_mb_ms"], 0)
+                self.assertEqual(handler.capacity(conn, self.org_b, actor,
+                                 (start, datetime.now(timezone.utc)))[0], 404)
+                epoch = conn.execute("SELECT started_at FROM hosting.capacity_metering_epoch").fetchone()["started_at"]
+                self.assertEqual(handler.capacity(conn, org, actor,
+                                 (epoch - timedelta(seconds=1), epoch))[0], 409)
+            with conn.transaction():
+                conn.execute("SELECT set_config('hosting.actor_sub',%s,true)", (viewer,))
+                conn.execute("SELECT set_config('hosting.auth_kind','human',true)")
+                self.assertEqual(handler.capacity(conn, org, viewer,
+                                 (start, datetime.now(timezone.utc)))[0], 200)
+            with conn.transaction():
+                conn.execute("SELECT set_config('hosting.actor_sub',%s,true)", (actor,))
+                conn.execute("SELECT set_config('hosting.auth_kind','service',true)")
+                self.assertEqual(conn.execute("SELECT count(*) FROM hosting.capacity_intervals").fetchone()["count"], 0)
+        with psycopg.connect(self.admin) as conn:
+            conn.execute("UPDATE hosting.releases SET state='FAILED',cleanup_at=now() WHERE id=%s", (release,))
+            end = conn.execute("SELECT ended_at FROM hosting.capacity_intervals "
+                               "WHERE resource_type='release' AND resource_id=%s", (release,)).fetchone()[0]
+            self.assertIsNotNone(end)
+            conn.execute("UPDATE hosting.releases SET cleanup_at=now() WHERE id=%s", (release,))
+            self.assertEqual(conn.execute("SELECT ended_at FROM hosting.capacity_intervals "
+                                          "WHERE resource_type='release' AND resource_id=%s",
+                                          (release,)).fetchone()[0], end)
+        with self.assertRaises(ValueError):
+            capacity_window("from=2026-09-24T00:00:00Z&to=2026-09-23T00:00:00Z")
 
     def test_tenant_audit_readback_cursor_and_chain(self):
         org, resource = uuid.uuid4(), uuid.uuid4()

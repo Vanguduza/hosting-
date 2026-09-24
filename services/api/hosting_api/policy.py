@@ -2,9 +2,9 @@ import re
 
 
 PERMISSIONS = {
-    "owner": frozenset({"audit:read", "project:read", "project:create", "application:read", "application:create", "application:traffic", "release:create", "release:read", "release:rollback", "domain:read", "domain:create", "domain:verify", "postgres:read", "postgres:create", "valkey:read", "valkey:create", "storage:read", "storage:create"}),
-    "admin": frozenset({"audit:read", "project:read", "project:create", "application:read", "application:create", "release:create", "release:read", "release:rollback", "domain:read", "domain:create", "domain:verify", "postgres:read", "postgres:create", "valkey:read", "valkey:create", "storage:read", "storage:create"}),
-    "viewer": frozenset({"audit:read", "project:read", "application:read", "release:read", "domain:read", "postgres:read", "valkey:read", "storage:read"}),
+    "owner": frozenset({"audit:read", "capacity:read", "project:read", "project:create", "application:read", "application:create", "application:traffic", "release:create", "release:read", "release:rollback", "domain:read", "domain:create", "domain:verify", "postgres:read", "postgres:create", "valkey:read", "valkey:create", "storage:read", "storage:create"}),
+    "admin": frozenset({"audit:read", "capacity:read", "project:read", "project:create", "application:read", "application:create", "release:create", "release:read", "release:rollback", "domain:read", "domain:create", "domain:verify", "postgres:read", "postgres:create", "valkey:read", "valkey:create", "storage:read", "storage:create"}),
+    "viewer": frozenset({"audit:read", "capacity:read", "project:read", "application:read", "release:read", "domain:read", "postgres:read", "valkey:read", "storage:read"}),
 }
 
 

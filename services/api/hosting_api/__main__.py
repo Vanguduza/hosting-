@@ -5,6 +5,7 @@ import re
 import secrets
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
@@ -109,6 +110,21 @@ def audit_after(query):
     return value
 
 
+def capacity_window(query):
+    match = re.fullmatch(r"from=(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)&"
+                         r"to=(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)", query)
+    if not match:
+        raise ValueError("Invalid capacity window")
+    try:
+        start, end = (datetime.fromisoformat(value.replace("Z", "+00:00")) for value in match.groups())
+    except ValueError as exc:
+        raise ValueError("Invalid capacity window") from exc
+    now = datetime.now(timezone.utc)
+    if not start < end <= now + timedelta(days=1) or end - start > timedelta(days=31) or start >= now:
+        raise ValueError("Invalid capacity window")
+    return start, min(end, now)
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "DialHosting/0.1"
 
@@ -148,6 +164,27 @@ class Handler(BaseHTTPRequestHandler):
         page = rows[:100]
         return 200, {"events": page, "next_after": page[-1]["id"] if page else after,
                      "has_more": len(rows) > 100}
+
+    def capacity(self, conn, org_id, actor, window):
+        if not allowed(self.membership(conn, org_id, actor), "capacity:read"):
+            return 404, {"error": "not_found"}
+        start, end = window
+        epoch = conn.execute("SELECT started_at FROM hosting.capacity_metering_epoch WHERE singleton=true").fetchone()
+        if not epoch or start < epoch["started_at"]:
+            return 409, {"error": "capacity_coverage_unavailable"}
+        rows = conn.execute(
+            "SELECT resource_type,count(*) AS reservations,"
+            "SUM(cpu_milli::numeric * floor(extract(epoch from ("
+            "least(coalesce(ended_at,%s),%s)-greatest(started_at,%s)))*1000))::bigint "
+            "AS reserved_cpu_milli_ms,"
+            "SUM(memory_mb::numeric * floor(extract(epoch from ("
+            "least(coalesce(ended_at,%s),%s)-greatest(started_at,%s)))*1000))::bigint "
+            "AS reserved_memory_mb_ms "
+            "FROM hosting.capacity_intervals WHERE organization_id=%s AND started_at<%s "
+            "AND (ended_at IS NULL OR ended_at>%s) GROUP BY resource_type ORDER BY resource_type",
+            (end, end, start, end, end, start, org_id, end, start)).fetchall()
+        return 200, {"from": start.isoformat(), "to": end.isoformat(),
+                     "coverage_start": epoch["started_at"].isoformat(), "allocations": rows}
 
     def membership(self, conn, org_id, actor):
         row = conn.execute(
@@ -780,6 +817,10 @@ class Handler(BaseHTTPRequestHandler):
                             r"/v1/organizations/([0-9a-f-]{36})/audit", path)):
                         result = self.audit(conn, uuid.UUID(match.group(1)), actor,
                                             audit_after(parsed_url.query))
+                    elif method == "GET" and (match := re.fullmatch(
+                            r"/v1/organizations/([0-9a-f-]{36})/capacity", path)):
+                        result = self.capacity(conn, uuid.UUID(match.group(1)), actor,
+                                               capacity_window(parsed_url.query))
                     elif path == "/v1/team/invitations/accept" and method == "POST":
                         result = self.accept_invitation(conn, actor, body, request_id)
                     elif match := re.fullmatch(r"/v1/organizations/([0-9a-f-]{36})/service-accounts(/revoke)?", path):

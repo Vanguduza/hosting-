@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import re
 import ssl
 import stat
 import sys
@@ -87,7 +88,8 @@ def parser():
     commands = result.add_subparsers(dest="command", required=True)
     arguments = {
         "live": (), "ready": (), "openapi": (), "orgs": (),
-        "audit": ("org",), "projects": ("org",), "project-create": ("org", "name"),
+        "audit": ("org",), "capacity": ("org", "from_utc", "to_utc"),
+        "projects": ("org",), "project-create": ("org", "name"),
         "applications": ("org", "project"),
         "application-create": ("org", "project", "name", "environment"),
         "traffic": ("org", "app"), "suspend": ("org", "app", "reason"),
@@ -131,6 +133,11 @@ def request_for(args):
         if not 0 <= args.after <= 9223372036854775807:
             raise ValueError("Audit cursor out of range")
         return org + "/audit" + ("?after=" + str(args.after) if args.after else ""), None, None
+    if name == "capacity":
+        pattern = r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z"
+        if not re.fullmatch(pattern, args.from_utc) or not re.fullmatch(pattern, args.to_utc):
+            raise ValueError("Capacity timestamps must be UTC seconds")
+        return org + "/capacity?from=" + args.from_utc + "&to=" + args.to_utc, None, None
     if name in ("service-accounts", "service-grant", "service-revoke"):
         path = org + "/service-accounts"
         if name == "service-revoke":

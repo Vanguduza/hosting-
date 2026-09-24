@@ -99,7 +99,8 @@ class CliTests(unittest.TestCase):
         one, two, three, four = (str(uuid.uuid4()) for _ in range(4))
         samples = {
             "live": [], "ready": [], "openapi": [], "orgs": [],
-            "audit": [one], "projects": [one], "project-create": [one, "alpha"],
+            "audit": [one], "capacity": [one, "2026-09-24T00:00:00Z", "2026-09-25T00:00:00Z"],
+            "projects": [one], "project-create": [one, "alpha"],
             "applications": [one, two], "application-create": [one, two, "api", "production"],
             "traffic": [one, three], "suspend": [one, three, "Owner requested pause"],
             "resume": [one, three, "Owner requested resume"],
@@ -119,7 +120,7 @@ class CliTests(unittest.TestCase):
                 args = parser().parse_args(["--base-url", "https://control.example:443", name, *params])
                 path, body, key = request_for(args)
                 matching = [template for template in paths if re.fullmatch(
-                    re.sub(r"\{[^}]+\}", "[^/]+", template), path)]
+                    re.sub(r"\{[^}]+\}", "[^/]+", template), path.partition("?")[0])]
                 self.assertEqual(len(matching), 1)
                 self.assertIn("post" if body is not None else "get", paths[matching[0]])
                 if name in ("team-invite", "release-queue", "rollback", "postgres-create", "valkey-create"):
