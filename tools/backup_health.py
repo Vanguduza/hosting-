@@ -73,7 +73,25 @@ def receipts(evidence):
     return result
 
 
-def evaluate(kind, evidence, max_age_hours=36, min_instances=0, now=None, instances=None):
+def remote_snapshot_ids():
+    if not os.environ.get("RESTIC_REPOSITORY") or not os.environ.get("RESTIC_PASSWORD_FILE"):
+        raise RuntimeError("Restic repository configuration unavailable")
+    password = Path(os.environ["RESTIC_PASSWORD_FILE"])
+    if password.is_symlink() or not password.is_file() or password.stat().st_uid != os.geteuid() or \
+            password.stat().st_mode & 0o077:
+        raise RuntimeError("Restic password must be an owner-only regular file")
+    result = subprocess.run(["restic", "snapshots", "--json"], capture_output=True,
+                            text=True, timeout=120, check=False)
+    if result.returncode:
+        raise RuntimeError("Encrypted Restic repository unavailable")
+    data = json.loads(result.stdout)
+    if not isinstance(data, list) or any(not isinstance(item, dict) or not isinstance(item.get("id"), str)
+                                         or not HEX.fullmatch(item["id"]) for item in data):
+        raise RuntimeError("Restic snapshot inventory invalid")
+    return {item["id"] for item in data}
+
+
+def evaluate(kind, evidence, max_age_hours=36, min_instances=0, now=None, instances=None, check_remote=False):
     if kind not in (*KINDS, "control"):
         raise ValueError("Unknown backup class")
     if type(max_age_hours) not in (int, float) or not 1 <= max_age_hours <= 720 or \
@@ -112,6 +130,10 @@ def evaluate(kind, evidence, max_age_hours=36, min_instances=0, now=None, instan
             raise RuntimeError("Invalid restore verification timestamp for resource " + resource)
         results.append({"instance_id": resource, "snapshot_id": newest["snapshot_id"],
                         "created_at": newest["created_at"], "restore_verified_at": newest["restore_verified_at"]})
+    if check_remote and results:
+        available = remote_snapshot_ids()
+        if any(item["snapshot_id"] not in available for item in results):
+            raise RuntimeError("Verified backup snapshot missing from Restic repository")
     return {"state": "BACKUP_HEALTHY" if results else "BACKUP_INVENTORY_EMPTY", "kind": kind,
             "instances": len(results), "verified": results}
 
@@ -122,8 +144,10 @@ def main():
     parser.add_argument("evidence_dir", type=Path)
     parser.add_argument("--max-age-hours", type=int, default=36)
     parser.add_argument("--min-instances", type=int, default=0)
+    parser.add_argument("--check-remote", action="store_true")
     args = parser.parse_args()
-    print(json.dumps(evaluate(args.kind, args.evidence_dir, args.max_age_hours, args.min_instances),
+    print(json.dumps(evaluate(args.kind, args.evidence_dir, args.max_age_hours, args.min_instances,
+                              check_remote=args.check_remote),
                      sort_keys=True))
 
 

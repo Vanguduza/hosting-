@@ -125,7 +125,7 @@ class ValkeyRuntime(unittest.TestCase):
                         snapshot = result["receipts"][0]["snapshot_id"]
                         self.assertEqual(json.loads((evidence / (snapshot + ".json")).read_text())["state"],
                                          "RESTORE_VERIFIED")
-                        self.assertEqual(evaluate("valkey", evidence)["state"], "BACKUP_HEALTHY")
+                        self.assertEqual(evaluate("valkey", evidence, check_remote=True)["state"], "BACKUP_HEALTHY")
                         contract = json.loads(probe_file.read_text())
                         contract["sha256"] = "0" * 64
                         probe_file.write_text(json.dumps(contract))

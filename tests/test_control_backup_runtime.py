@@ -41,7 +41,7 @@ class ControlBackupRuntime(unittest.TestCase):
                 verified = verify(environment(offhost=False), backup(evidence)["snapshot_id"])
                 self.assertEqual(verified["state"], "RESTORE_VERIFIED")
                 self.assertGreaterEqual(verified["semantic_counts"]["organizations"], 2)
-                self.assertEqual(evaluate("control", evidence)["state"], "BACKUP_HEALTHY")
+                self.assertEqual(evaluate("control", evidence, check_remote=True)["state"], "BACKUP_HEALTHY")
                 self.assertEqual(json.loads((evidence / (verified["snapshot_id"] + ".json")).read_text())[
                     "state"], "RESTORE_VERIFIED")
                 with patch.dict(os.environ, {"PGUSER": api_dsn.username, "PGPASSFILE": str(pgpass)}):

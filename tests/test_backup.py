@@ -34,6 +34,9 @@ class ReceiptTests(unittest.TestCase):
             os.chmod(path, 0o600)
             self.assertEqual(evaluate("valkey", directory, now=now, instances={instance})["state"],
                              "BACKUP_HEALTHY")
+            with patch("backup_health.remote_snapshot_ids", return_value=set()):
+                with self.assertRaisesRegex(RuntimeError, "missing from Restic"):
+                    evaluate("valkey", directory, now=now, instances={instance}, check_remote=True)
             receipt["state"] = "BACKUP_CREATED"
             path.write_text(json.dumps(receipt))
             with self.assertRaisesRegex(RuntimeError, "lacks verified restore"):
