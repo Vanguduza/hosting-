@@ -11,3 +11,5 @@ The control plane must check actor, tenant, policy, artifact signature, placemen
 `deploy/node-agent/install.sh` installs the Python package and systemd service after the operator supplies an owner-only environment file and mTLS certificates. Make the private key readable to the `dial-node` group only (`root:dial-node`, mode 0640); keep the environment file root-only (0600). The installer does not pick a node or expose one publicly. Docker group membership is effectively host privilege; only the restricted agent process receives it. A private firewall must permit the chosen worker IP and deny other clients.
 
 The separate root-owned storage backup timer and its off-host Restic repository are described in [the object-storage runbook](../../docs/OBJECT_STORAGE.md). Configure a semantic S3 canary for every resource before enabling the timer.
+
+The separate Valkey cache backup timer and authenticated semantic restore check are described in [the Valkey runbook](../../docs/MANAGED_VALKEY.md). Configure a persistent canary for each resource.

@@ -11,9 +11,33 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from control_backup import snapshot_id
 from postgres_backup import restore_probe
 from storage_backup import configuration as storage_configuration, semantic_probe
+from valkey_backup import configuration as valkey_configuration, semantic_probe as valkey_semantic_probe
 
 
 class ReceiptTests(unittest.TestCase):
+    def test_valkey_backup_offhost_and_probe_contract(self):
+        instance = str(uuid.uuid4())
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "probes"
+            root.mkdir(mode=0o700)
+            path = root / (instance + ".json")
+            with patch.dict(os.environ, {"BACKUP_PROBE_DIR": str(root)}):
+                with self.assertRaisesRegex(RuntimeError, "owner-only regular file"):
+                    valkey_semantic_probe(instance)
+                path.write_text(json.dumps({"key": "cache_canary", "sha256": "a" * 64, "size_bytes": 7}))
+                os.chmod(path, 0o600)
+                self.assertEqual(valkey_semantic_probe(instance)["size_bytes"], 7)
+                path.write_text(json.dumps({"key": "bad key", "sha256": "a" * 64, "size_bytes": 7}))
+                with self.assertRaisesRegex(RuntimeError, "Invalid Valkey semantic probe"):
+                    valkey_semantic_probe(instance)
+            with patch.dict(os.environ, {"RESTIC_REPOSITORY": temporary, "RESTIC_PASSWORD_FILE": "x",
+                                        "BACKUP_EVIDENCE_DIR": "x", "BACKUP_TMP_DIR": "x",
+                                        "BACKUP_PROBE_DIR": "x", "NODE_STATE_FILE": "x",
+                                        "NODE_SECRETS_DIR": "x", "NODE_VALKEY_IMAGE": "x",
+                                        "NODE_STORAGE_SHELL_IMAGE": "x"}):
+                with self.assertRaisesRegex(RuntimeError, "off-host"):
+                    valkey_configuration()
+
     def test_storage_probe_contract_and_offhost_requirement(self):
         instance = str(uuid.uuid4())
         with tempfile.TemporaryDirectory() as temporary:

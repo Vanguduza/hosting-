@@ -1,5 +1,6 @@
 """Disposable Valkey service proof: authenticated RESP, persistence, and isolation."""
 import json
+import hashlib
 import os
 import socket
 import subprocess
@@ -92,6 +93,48 @@ class ValkeyRuntime(unittest.TestCase):
                 subprocess.run(["docker", "restart", container], check=True, capture_output=True)
                 self.assertEqual(provision(node, payload), ready)
                 self.assertEqual(wire(ip, ["AUTH", "dial_app", password], ["GET", "key"]), b"$7\r\ndurable\r\n")
+                if os.environ.get("VALKEY_RUNTIME_BACKUP"):
+                    sys.path.insert(0, str(ROOT / "tools"))
+                    from valkey_backup import backup_all, configuration, restore_drill
+                    folders = {key: Path(temp) / folder for key, folder in (
+                        ("BACKUP_EVIDENCE_DIR", "evidence"), ("BACKUP_TMP_DIR", "backup-tmp"),
+                        ("BACKUP_PROBE_DIR", "probes"))}
+                    for folder in folders.values():
+                        folder.mkdir(mode=0o700)
+                    password_file = Path(temp) / "restic-password"
+                    password_file.write_text("disposable-valkey-backup-test-password")
+                    os.chmod(password_file, 0o600)
+                    probe_file = folders["BACKUP_PROBE_DIR"] / (instance + ".json")
+                    probe_file.write_text(json.dumps({"key": "key", "sha256": hashlib.sha256(b"durable").hexdigest(),
+                                                      "size_bytes": 7}))
+                    os.chmod(probe_file, 0o600)
+                    setting = {"RESTIC_REPOSITORY": str(Path(temp) / "repository"),
+                               "RESTIC_PASSWORD_FILE": str(password_file),
+                               "NODE_STATE_FILE": str(Path(temp) / "state.sqlite3"),
+                               "NODE_SECRETS_DIR": str(node.secrets_dir),
+                               "NODE_STORAGE_SHELL_IMAGE": os.environ["VALKEY_BACKUP_SHELL_IMAGE"],
+                               **{key: str(path) for key, path in folders.items()}}
+                    previous_backup = {key: os.environ.get(key) for key in setting}
+                    os.environ.update(setting)
+                    try:
+                        subprocess.run(["restic", "init"], check=True, capture_output=True)
+                        evidence, backup_node, helper = configuration(offhost=False)
+                        result = backup_all(evidence, backup_node, helper)
+                        self.assertEqual((result["state"], result["instances"]), ("FLEET_BACKUP_VERIFIED", 1))
+                        snapshot = result["receipts"][0]["snapshot_id"]
+                        self.assertEqual(json.loads((evidence / (snapshot + ".json")).read_text())["state"],
+                                         "RESTORE_VERIFIED")
+                        contract = json.loads(probe_file.read_text())
+                        contract["sha256"] = "0" * 64
+                        probe_file.write_text(json.dumps(contract))
+                        with self.assertRaisesRegex(RuntimeError, "probe changed"):
+                            restore_drill(instance, snapshot, evidence, backup_node, helper)
+                    finally:
+                        for key, value in previous_backup.items():
+                            if value is None:
+                                os.environ.pop(key, None)
+                            else:
+                                os.environ[key] = value
                 with self.assertRaises(OperationError):
                     provision(node, {**payload, "application_id": str(uuid.uuid4())})
                 subprocess.run(["docker", "network", "disconnect", network, container],
