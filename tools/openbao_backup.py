@@ -177,7 +177,7 @@ def verify(evidence, probe, snapshot, restore_address, restore_ca, restore_token
         raise RuntimeError("Restore target belongs to the source cluster")
     # The operator puts a fresh unpredictable marker into the disposable target.
     # An unrelated running authority cannot accidentally pass this check.
-    preflight = read_json(target, restore_ca, restore_token, "sys/identity/entity/name/dial-disposable-restore")
+    preflight = read_json(target, restore_ca, restore_token, "identity/entity/name/dial-disposable-restore")
     if preflight["data"].get("metadata", {}).get("nonce") != marker or len(marker) < 32:
         raise RuntimeError("Disposable restore target marker mismatch")
     with tempfile.TemporaryDirectory(prefix="dial-bao-restore-") as temp:
