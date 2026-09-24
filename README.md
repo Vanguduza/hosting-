@@ -2,7 +2,7 @@
 
 This repository binds the DIAL hosting blueprint to source control and contains implemented control-plane contracts. The attached [Rev 1 blueprint](development-pack/BLUEPRINT_REV_1.md) remains the requirements source; [Review Rev 2](development-pack/REVIEW_REV_2.md) records corrections and execution gates.
 
-The private control API exposes its currently implemented OpenAPI 3.1 contract at `GET /openapi.json` without a bearer token. It lists only existing routes; it is a client integration contract, not evidence of production qualification.
+The private control API exposes its currently implemented OpenAPI 3.1 contract at `GET /openapi.json` without a bearer token. It lists only existing routes and validates in CI; it is a client integration contract, not evidence of production qualification. `DU-005` remains partial because a production API gateway and external ingress policy are not installed.
 
 ## Current certification
 
