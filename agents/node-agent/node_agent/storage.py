@@ -141,6 +141,7 @@ def provision(node, data):
             labels = current.get("Config", {}).get("Labels", {})
             if labels.get("dial.storage") != instance or labels.get("dial.application") != app or \
                     current.get("Config", {}).get("Image") != launcher or \
+                    current.get("Config", {}).get("User") != "0:0" or \
                     network not in current.get("NetworkSettings", {}).get("Networks", {}) or \
                     current.get("HostConfig", {}).get("PortBindings") or \
                     not any(m.get("Name") == volume and m.get("Destination") == "/var/lib/garage"
@@ -183,6 +184,7 @@ def provision(node, data):
             node.runner(["docker", "run", "-d", "--name", container,
                          "--label", "dial.storage=" + instance, "--label", "dial.application=" + app,
                          "--network", network, "--restart=unless-stopped", "--read-only",
+                         "--user=0:0",
                          "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=128",
                          "--memory=" + str(memory) + "m", "--cpus=" + str(cpu / 1000),
                          "--tmpfs=/tmp:rw,nosuid,noexec,size=32m",
