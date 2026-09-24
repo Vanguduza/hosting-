@@ -66,14 +66,17 @@ def _config(node, instance, values):
                '[admin]\napi_bind_addr = "127.0.0.1:3903"\n'
                'admin_token = "' + values["admin_token"] + '"\n')
     if path.exists():
-        if path.stat().st_mode & 0o077 or path.read_text() != content:
+        if path.stat().st_mode & 0o777 not in (0o600, 0o444) or path.read_text() != content:
             raise OperationError("Storage configuration differs from exact secret revision")
+        if path.stat().st_mode & 0o777 == 0o600:
+            os.chmod(path, 0o444)
     else:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, "w") as file:
             file.write(content)
             file.flush()
             os.fsync(file.fileno())
+        os.chmod(path, 0o444)
     return path
 
 
@@ -133,7 +136,8 @@ def provision(node, data):
     container, network, volume = names(instance)
     bucket = bucket_name(instance)
     with node.lock, node.file_lock():
-        files, values = credential_files(node, instance, version)
+        _, values = credential_files(node, instance, version)
+        mounted = app_credentials(node, instance, version)
         config = _config(node, instance, values)
         launcher = launcher_image(node, image)
         current = inspect(node, container)
@@ -190,9 +194,9 @@ def provision(node, data):
                          "--tmpfs=/tmp:rw,nosuid,noexec,size=32m",
                          "--mount", "type=volume,src=" + volume + ",dst=/var/lib/garage",
                          "--mount", "type=bind,src=" + str(config) + ",dst=/etc/garage.toml,readonly",
-                         "--mount", "type=bind,src=" + str(files["access_key"]) +
+                         "--mount", "type=bind,src=" + str(mounted / "access_key") +
                                     ",dst=/run/secrets/access_key,readonly",
-                         "--mount", "type=bind,src=" + str(files["secret_key"]) +
+                         "--mount", "type=bind,src=" + str(mounted / "secret_key") +
                                     ",dst=/run/secrets/secret_key,readonly",
                          "-e", "GARAGE_DEFAULT_BUCKET=" + bucket,
                          "--entrypoint", "/bin/sh", launcher, "-ec", launch], 120)
