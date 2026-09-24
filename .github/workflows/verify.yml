@@ -62,6 +62,12 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y restic
       - run: docker pull postgres:17
       - run: |
+          pg_ci_container=$(docker ps -q --filter ancestor=postgres:17)
+          test -n "$pg_ci_container"
+          docker exec -u postgres "$pg_ci_container" sh -c \
+            'printf "host replication postgres 0.0.0.0/0 scram-sha-256\n" >> /var/lib/postgresql/data/pg_hba.conf'
+          docker exec -u postgres "$pg_ci_container" pg_ctl -D /var/lib/postgresql/data reload
+      - run: |
           mkdir -p /tmp/dial-pg-client
           cat > /tmp/dial-pg-client/psql <<'SH'
           #!/bin/sh
