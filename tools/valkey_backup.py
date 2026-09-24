@@ -214,7 +214,7 @@ def restore_drill(instance, snapshot, evidence, node, helper):
             run(["docker", "volume", "create", volume], 30)
             made_volume = True
             run(["docker", "run", "--rm", "--network=none", "--read-only", "--user=0:0",
-                 "--cap-drop=ALL", "--cap-add=CHOWN", "--cap-add=FOWNER",
+                 "--cap-drop=ALL", "--cap-add=CHOWN", "--cap-add=FOWNER", "--cap-add=DAC_OVERRIDE",
                  "--security-opt=no-new-privileges", "--pids-limit=64", "--memory=256m",
                  "--mount", "type=volume,src=" + volume + ",dst=/source",
                  "--mount", "type=bind,src=" + str(files[0]) + ",dst=/run/archive/valkey.tar,readonly",
