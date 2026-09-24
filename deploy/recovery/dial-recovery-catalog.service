@@ -1,0 +1,13 @@
+[Unit]
+Description=DIAL encrypted disaster recovery catalog publication
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/dial-hosting/recovery-catalog.env
+ExecStart=/usr/bin/flock -n /run/dial-recovery-catalog.lock /usr/bin/python3 /opt/dial-hosting/recovery_catalog.py /etc/dial-hosting/recovery-catalog.json publish /var/lib/dial-hosting/recovery-catalog
+TimeoutStartSec=30m
+NoNewPrivileges=yes
+UMask=0077

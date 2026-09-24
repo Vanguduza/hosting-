@@ -1,0 +1,13 @@
+[Unit]
+Description=DIAL off-host recovery catalog and resource snapshot health
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/dial-hosting/recovery-catalog.env
+ExecStart=/usr/bin/flock -n /run/dial-recovery-catalog.lock /usr/bin/python3 /opt/dial-hosting/recovery_catalog.py /etc/dial-hosting/recovery-catalog.json inspect-latest
+TimeoutStartSec=15m
+NoNewPrivileges=yes
+UMask=0077

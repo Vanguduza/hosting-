@@ -1,0 +1,11 @@
+[Unit]
+Description=Publish daily verified recovery catalog
+
+[Timer]
+OnCalendar=*-*-* 09:00:00 UTC
+RandomizedDelaySec=30m
+Persistent=yes
+Unit=dial-recovery-catalog.service
+
+[Install]
+WantedBy=timers.target

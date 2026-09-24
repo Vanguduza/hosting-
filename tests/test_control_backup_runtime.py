@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 from backup_health import evaluate
 from control_backup import backup, environment, verify
 from control_physical_backup import backup as physical_backup, verify as physical_verify
+from recovery_catalog import load_config, publish, inspect
 
 
 @unittest.skipUnless(os.environ.get("TEST_ADMIN_DSN") and os.environ.get("CONTROL_RUNTIME_BACKUP"),
@@ -53,6 +54,33 @@ class ControlBackupRuntime(unittest.TestCase):
                                             os.environ["CONTROL_POSTGRES_IMAGE"])
                 self.assertEqual(restored["state"], "RESTORE_VERIFIED")
                 self.assertGreaterEqual(restored["semantic_counts"]["organizations"], 2)
+                catalog_repository = root / "catalog-repository"
+                with patch.dict(os.environ, {"RESTIC_REPOSITORY": str(catalog_repository)}):
+                    run(["restic", "init"])
+                catalog_dir = root / "catalog"
+                catalog_dir.mkdir(mode=0o700)
+                config_file = root / "catalog-config.json"
+                config_file.write_text(json.dumps({
+                    "version": 1, "catalog_id": "ci-control", "host_id": "ci-database",
+                    "failure_domain": "ci-primary", "recovery_failure_domain": "ci-recovery",
+                    "catalog_repository": str(catalog_repository), "catalog_password_file": str(secret),
+                    "classes": [{"kind": kind, "evidence_dir": str(directory),
+                                 "repository": str(root / "repository"), "password_file": str(secret),
+                                 "max_age_hours": 36, "required_instances": []}
+                                for kind, directory in (("control", evidence),
+                                                        ("control-physical", physical_evidence))]}))
+                os.chmod(config_file, 0o600)
+                catalog = load_config(config_file, allow_local=True)
+                published = publish(catalog, catalog_dir)
+                self.assertEqual(published["state"], "CATALOG_PUBLISHED")
+                inspected = inspect(catalog, published["snapshot_id"])
+                self.assertEqual(inspected["state"], "CATALOG_INSPECTED")
+                self.assertEqual(inspected["entries"], 2)
+                self.assertEqual(inspected["sha256"], published["sha256"])
+                wrong_repo = {**catalog, "classes": [{**catalog["classes"][0],
+                    "repository": str(root / "missing-repository")}, catalog["classes"][1]]}
+                with self.assertRaisesRegex(RuntimeError, "provenance mismatch"):
+                    inspect(wrong_repo, published["snapshot_id"])
                 with patch.dict(os.environ, {"PGUSER": api_dsn.username, "PGPASSFILE": str(pgpass)}):
                     with self.assertRaisesRegex(RuntimeError, "cannot see every tenant"):
                         backup(evidence)
