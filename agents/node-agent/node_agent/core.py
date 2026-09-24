@@ -33,9 +33,11 @@ def command(args, timeout=60):
 def valid(request):
     required = {"operation_id", "application_id", "release_id", "image", "port", "health_path", "memory_mb", "cpu_milli"}
     optional = set(request) - required
-    if not required <= set(request) or optional not in (
-        set(), {"postgres_id", "postgres_version"}, {"valkey_id", "valkey_version"},
-        {"postgres_id", "postgres_version", "valkey_id", "valkey_version"}):
+    allowed_resources = ({"postgres_id", "postgres_version"}, {"valkey_id", "valkey_version"},
+                         {"storage_id", "storage_version"})
+    if not required <= set(request) or any(
+            bool(optional & fields) and not fields <= optional for fields in allowed_resources) or \
+            optional - set().union(*allowed_resources):
         raise ValueError("Unexpected or missing deployment properties")
     for key in ("operation_id", "application_id", "release_id"):
         if not isinstance(request[key], str) or str(uuid.UUID(request[key])) != request[key]:
@@ -60,6 +62,11 @@ def valid(request):
         identifier(request["valkey_id"])
         if type(request["valkey_version"]) is not int or request["valkey_version"] != 1:
             raise ValueError("Invalid Valkey secret version")
+    if "storage_id" in request:
+        from .postgres import identifier
+        identifier(request["storage_id"])
+        if type(request["storage_version"]) is not int or request["storage_version"] != 1:
+            raise ValueError("Invalid storage secret version")
     return request
 
 
@@ -204,6 +211,20 @@ class Node:
                                     "-e", "CACHE_HOST=" + cache_container, "-e", "CACHE_PORT=6379",
                                     "-e", "CACHE_USER=dial_app",
                                     "-e", "CACHE_PASSWORD_FILE=/run/secrets/valkey_password"]
+                    storage_flags = []
+                    if "storage_id" in request:
+                        from .storage import names, bucket_name, app_credentials
+                        mount = app_credentials(self, request["storage_id"], request["storage_version"])
+                        storage_container = names(request["storage_id"])[0]
+                        storage_flags = ["--mount", "type=bind,src=" + str(mount / "access_key") +
+                                         ",dst=/run/secrets/s3_access_key,readonly",
+                                         "--mount", "type=bind,src=" + str(mount / "secret_key") +
+                                         ",dst=/run/secrets/s3_secret_key,readonly",
+                                         "-e", "S3_ENDPOINT=http://" + storage_container + ":3900",
+                                         "-e", "S3_BUCKET=" + bucket_name(request["storage_id"]),
+                                         "-e", "S3_REGION=garage",
+                                         "-e", "S3_ACCESS_KEY_FILE=/run/secrets/s3_access_key",
+                                         "-e", "S3_SECRET_KEY_FILE=/run/secrets/s3_secret_key"]
                     self.runner([
                         "docker", "run", "-d", "--name", container,
                         "--label", "dial.application=" + app_id,
@@ -215,6 +236,7 @@ class Node:
                         "--user=10001:10001", "--tmpfs=/tmp:rw,nosuid,noexec,size=64m",
                         *pg_flags,
                         *vk_flags,
+                        *storage_flags,
                         request["image"],
                     ], 120)
                 if "postgres_id" in request:
@@ -223,6 +245,9 @@ class Node:
                 if "valkey_id" in request:
                     from .valkey import attach as attach_valkey
                     attach_valkey(self, request["valkey_id"], app_id, release_id)
+                if "storage_id" in request:
+                    from .storage import attach as attach_storage
+                    attach_storage(self, request["storage_id"], app_id, release_id)
                 deadline = time.monotonic() + 90
                 healthy = False
                 while time.monotonic() < deadline:

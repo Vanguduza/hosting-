@@ -99,6 +99,7 @@ def parser():
         "rollback": ("org", "app", "target_release_id"),
         "postgres": ("org", "app"), "postgres-create": ("org", "app", "memory_mb", "cpu_milli"),
         "valkey": ("org", "app"), "valkey-create": ("org", "app", "memory_mb", "cpu_milli"),
+        "storage": ("org", "app"), "storage-create": ("org", "app", "memory_mb", "cpu_milli"),
         "team-invitations": ("org",), "team-invite": ("org", "role", "expires_hours"),
         "team-revoke": ("org", "invitation_id"), "team-members": ("org",),
         "team-remove": ("org", "actor_sub"), "team-accept": (),
@@ -109,7 +110,7 @@ def parser():
         command = commands.add_parser(name)
         for field in fields:
             command.add_argument(field, type=int if field in ("port", "memory_mb", "cpu_milli", "expires_hours") else str)
-        if name in ("team-invite", "release-queue", "rollback", "postgres-create", "valkey-create"):
+        if name in ("team-invite", "release-queue", "rollback", "postgres-create", "valkey-create", "storage-create"):
             command.add_argument("--idempotency-key", type=identifier)
         if name == "team-accept":
             command.add_argument("--invitation-file", required=True, help="Owner-only invitation token file")
@@ -162,7 +163,7 @@ def request_for(args):
         return app + ("/domain/verify" if name == "domain-verify" else "/domain"), \
             ({"hostname": args.hostname} if name == "domain-register" else
              {} if name == "domain-verify" else None), None
-    if name in ("builds", "releases", "postgres", "valkey"):
+    if name in ("builds", "releases", "postgres", "valkey", "storage"):
         return app + "/" + name, None, None
     if name == "release-queue":
         key = args.idempotency_key or str(uuid.uuid4())
@@ -173,7 +174,7 @@ def request_for(args):
         key = args.idempotency_key or str(uuid.uuid4())
         return app + "/rollback", {"idempotency_key": key,
                                    "target_release_id": identifier(args.target_release_id)}, key
-    if name in ("postgres-create", "valkey-create"):
+    if name in ("postgres-create", "valkey-create", "storage-create"):
         key = args.idempotency_key or str(uuid.uuid4())
         resource = name.removesuffix("-create")
         return app + "/" + resource, {"idempotency_key": key, "memory_mb": args.memory_mb,

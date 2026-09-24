@@ -194,10 +194,16 @@ def document():
                 obj({"valkey": {"oneOf": [{"type": "null"}, resource]}}, ("valkey",))),
             "post": operation("queueValkey", "Provision private Valkey", 202, queued,
                               allocation(128, 16384, 100, 16000))},
+        app + "/storage": {
+            "get": operation("getStorage", "Read private object storage state", 200,
+                obj({"storage": {"oneOf": [{"type": "null"}, resource]}}, ("storage",))),
+            "post": operation("queueStorage", "Provision an application-bound private S3 bucket", 202,
+                              queued, allocation(256, 16384, 100, 16000),
+                              description="Single-node persistent Garage profile; no public endpoint or redundancy.")},
     }
     replay = response(obj({"id": UUID, "state": STRING, "replayed": {"const": True}},
                           ("id", "state", "replayed")), "Matching idempotent replay")
-    for path in (app + "/releases", app + "/rollback", app + "/postgres", app + "/valkey"):
+    for path in (app + "/releases", app + "/rollback", app + "/postgres", app + "/valkey", app + "/storage"):
         paths[path]["post"]["responses"]["200"] = replay
     paths[org + "/team/invitations"]["post"]["responses"]["200"] = response(
         obj({"id": UUID, "expires_at": DATE, "replayed": {"const": True}},

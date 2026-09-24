@@ -22,6 +22,7 @@ from hosting_api.__main__ import Handler
 from hosting_api.worker import claim, finalize, sweep_retirements, sweep_failed, process_traffic_once
 from hosting_api.postgres_jobs import claim as claim_postgres, finalize as finalize_postgres
 from hosting_api.valkey_jobs import claim as claim_valkey, finalize as finalize_valkey
+from hosting_api.storage_jobs import claim as claim_storage, finalize as finalize_storage
 from hosting_api.github_webhook import Handler as HookHandler
 from hosting_api.github_webhook import enqueue, parse_push, verify
 from http.server import ThreadingHTTPServer
@@ -81,14 +82,14 @@ class DatabaseIntegration(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             destination = Path(temporary) / "schema"
             shutil.copytree(ROOT / "services/api/schema", destination)
-            (destination / "016_rollback_probe.sql").write_text(
+            (destination / "017_rollback_probe.sql").write_text(
                 "CREATE TABLE hosting.rollback_probe(id integer);\n"
                 "SELECT 1 / 0;\n", encoding="utf-8")
             with psycopg.connect(self.admin, autocommit=True) as conn:
                 with self.assertRaises(psycopg.errors.DivisionByZero):
                     apply_migrations(conn, destination)
                 self.assertIsNone(conn.execute("SELECT to_regclass('hosting.rollback_probe')").fetchone()[0])
-                self.assertEqual(conn.execute("SELECT count(*) FROM hosting.schema_migrations").fetchone()[0], 15)
+                self.assertEqual(conn.execute("SELECT count(*) FROM hosting.schema_migrations").fetchone()[0], 16)
                 verify_migrations(conn)
 
     def test_service_account_application_scope_and_revoke(self):
@@ -486,6 +487,50 @@ class DatabaseIntegration(unittest.TestCase):
                 self.assertEqual(status, 202)
                 self.assertEqual(conn.execute("SELECT node_id FROM hosting.releases WHERE id=%s",
                                               (release["id"],)).fetchone()["node_id"], self.node)
+
+    def test_zzz_object_storage_tenant_bucket_and_release_placement(self):
+        handler = Handler.__new__(Handler)
+        with psycopg.connect(self.api, row_factory=dict_row) as conn:
+            with conn.transaction():
+                conn.execute("SELECT set_config('hosting.actor_sub','alice',true)")
+                _, app = handler.applications(conn, self.org_a, self.project_a, "alice",
+                                               {"name": "storage-client", "environment": "production"},
+                                               "POST", uuid.uuid4())
+                app_id = app["id"]
+                body = {"idempotency_key": str(uuid.uuid4()), "memory_mb": 256, "cpu_milli": 200}
+                self.assertEqual(handler.storage(conn, self.org_b, app_id, "alice", body,
+                                                 "POST", uuid.uuid4())[0], 404)
+                code, queued = handler.storage(conn, self.org_a, app_id, "alice", body, "POST", uuid.uuid4())
+                self.assertEqual(code, 202)
+                self.assertEqual(handler.storage(conn, self.org_a, app_id, "alice", body,
+                                                 "POST", uuid.uuid4())[1]["replayed"], True)
+                self.assertEqual(handler.storage(conn, self.org_a, app_id, "alice",
+                                                 {**body, "memory_mb": 512}, "POST", uuid.uuid4())[0], 409)
+                handler.domains(conn, self.org_a, app_id, "alice",
+                                {"hostname": "storageclient.example.org"}, "POST", uuid.uuid4())
+                with patch("hosting_api.__main__.txt_proves", return_value=True):
+                    handler.domains(conn, self.org_a, app_id, "alice", {}, "POST", uuid.uuid4(), verify=True)
+                release_body = {"idempotency_key": str(uuid.uuid4()), "image": self.image, "port": 8080,
+                                "health_path": "/health", "cpu_milli": 100, "memory_mb": 128}
+                self.assertEqual(handler.releases(conn, self.org_a, app_id, "alice", release_body,
+                                                  "POST", uuid.uuid4())[1], {"error": "storage_not_ready"})
+        with psycopg.connect(self.worker, row_factory=dict_row, autocommit=True) as conn:
+            job, instance, node, attempt = claim_storage(conn)
+            self.assertEqual((instance["id"], node["id"]), (queued["id"], self.node))
+            self.assertTrue(finalize_storage(conn, job, instance, attempt, receipt={
+                "instance_id": str(instance["id"]), "state": "READY_PRIVATE", "secret_version": 1,
+                "bucket": "dial-" + str(instance["id"]), "host": "dial-s3-" + str(instance["id"])}))
+        with psycopg.connect(self.api, row_factory=dict_row) as conn:
+            with conn.transaction():
+                conn.execute("SELECT set_config('hosting.actor_sub','alice',true)")
+                self.assertEqual(handler.storage(conn, self.org_a, app_id, "alice", {}, "GET", uuid.uuid4())[1]
+                                 ["storage"]["state"], "READY")
+                self.assertEqual(handler.releases(conn, self.org_a, app_id, "alice", release_body,
+                                                  "POST", uuid.uuid4())[0], 202)
+            with conn.transaction():
+                conn.execute("SELECT set_config('hosting.actor_sub','bob',true)")
+                self.assertEqual(conn.execute("SELECT id FROM hosting.object_storage_instances "
+                                              "WHERE id=%s", (queued["id"],)).fetchall(), [])
 
     def test_team_invitation_single_use_tenant_scope_and_owner_guard(self):
         handler = Handler.__new__(Handler)

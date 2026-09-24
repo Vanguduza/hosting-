@@ -451,9 +451,12 @@ def process_once(conn, certificate):
     refresh_nodes(conn, certificate)
     from .postgres_jobs import process_once as process_postgres
     from .valkey_jobs import process_once as process_valkey
+    from .storage_jobs import process_once as process_storage
     if process_postgres(conn, certificate):
         return True
     if process_valkey(conn, certificate):
+        return True
+    if process_storage(conn, certificate):
         return True
     sweep_failed(conn, certificate)
     sweep_retirements(conn, certificate)
@@ -486,6 +489,13 @@ def process_once(conn, certificate):
                 raise RuntimeError("Assigned cache unavailable or on a different node")
             payload["valkey_id"] = str(cache["id"])
             payload["valkey_version"] = cache["secret_version"]
+        storage = conn.execute("SELECT id,node_id,secret_version,state FROM hosting.object_storage_instances "
+                               "WHERE application_id=%s", (release["application_id"],)).fetchone()
+        if storage:
+            if storage["state"] != "READY" or storage["node_id"] != release["node_id"]:
+                raise RuntimeError("Assigned storage unavailable or on a different node")
+            payload["storage_id"] = str(storage["id"])
+            payload["storage_version"] = storage["secret_version"]
         receipt = node_request(node, payload, certificate)
         domain = conn.execute("SELECT hostname,verification_token,verified_at FROM hosting.domains "
                               "WHERE application_id=%s", (release["application_id"],)).fetchone()
