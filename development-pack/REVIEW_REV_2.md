@@ -42,6 +42,8 @@ evidence for tenant scope, authentication boundaries, schema consistency,
 PostgreSQL and Valkey resource lifecycles, development-only private Garage S3,
 encrypted control/client logical backups and quiesced Valkey/Garage volume
 backups with isolated semantic restore probes and hourly freshness checks,
+an OpenBao Raft snapshot workflow with a disposable authority recovery probe
+and off-host repository freshness check,
 Docker isolation, and Traefik TLS routing
 with a per-client rate limit. The CI hosts are ephemeral and are not a
 production estate. No production node, offsite backup target, provider

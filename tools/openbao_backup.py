@@ -39,8 +39,12 @@ def api(address, ca, token_file, method, path, body=None, output=None):
     request = urllib.request.Request(origin(address) + "/v1/" + path, data=body,
                                      headers={"X-Vault-Token": token}, method=method)
     context = ssl.create_default_context(cafile=str(protected(ca)))
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, request, fp, code, message, headers, newurl):
+            raise RuntimeError("OpenBao redirected an authenticated backup request")
+    opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=context), NoRedirect())
     try:
-        with urllib.request.urlopen(request, context=context, timeout=600) as response:
+        with opener.open(request, timeout=600) as response:
             if output:
                 with open(output, "xb") as destination:
                     for chunk in iter(lambda: response.read(1024 * 1024), b""):

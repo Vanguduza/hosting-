@@ -48,6 +48,10 @@ then records `RESTORE_VERIFIED`. Rotate/delete the disposable credentials and
 destroy this test authority after the drill. The Restic password, repository
 access, original unseal material, TLS configuration and plugins need separate
 protected recovery copies; this workflow does not store unseal keys. The
+hourly health timer fails if the newest daily snapshot is not independently
+restored and verified within 36 hours or disappears from Restic. Schedule an
+isolated drill for each new snapshot; an unverified snapshot cannot silently
+inherit a prior green receipt. The
 production cluster still requires operator-controlled initialization/unseal,
 TLS identity, audit device, restricted network, HA and a tested cross-host
 recovery drill. Node-local copies must be included

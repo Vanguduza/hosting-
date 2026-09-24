@@ -41,6 +41,9 @@ class RaftRecovery(unittest.TestCase):
                             "-keyout", str(key), "-out", str(certificate)], check=True, capture_output=True)
             os.chmod(certificate, 0o600)
             os.chmod(key, 0o644)
+            server_certificate = root / "server-cert.pem"
+            server_certificate.write_bytes(certificate.read_bytes())
+            os.chmod(server_certificate, 0o644)
             context = ssl.create_default_context(cafile=str(certificate))
 
             def request(port, method, path, token=None, payload=None):
@@ -61,7 +64,7 @@ class RaftRecovery(unittest.TestCase):
                                   'cluster_addr = "https://127.0.0.1:8201"\n'
                                   'storage "raft" { path = "/data" node_id = "' + name + '" }\n'
                                   'listener "tcp" { address = "0.0.0.0:8200" '
-                                  'tls_cert_file = "/tls/cert.pem" tls_key_file = "/tls/key.pem" }\n')
+                                  'tls_cert_file = "/tls/server-cert.pem" tls_key_file = "/tls/key.pem" }\n')
                 os.chmod(config, 0o644)
                 docker("volume", "create", name)
                 docker("run", "--rm", "--user", "0:0", "--entrypoint", "chown", "-v", f"{name}:/data",
@@ -76,6 +79,8 @@ class RaftRecovery(unittest.TestCase):
                         request(port, "GET", "sys/init")
                         break
                     except (urllib.error.URLError, TimeoutError):
+                        if docker("inspect", "-f", "{{.State.Status}}", name) == "exited":
+                            raise RuntimeError("Raft server exited: " + docker("logs", name)[-700:])
                         if time.monotonic() > deadline:
                             raise RuntimeError("Raft server did not start: " + docker("logs", name)[-700:])
                         time.sleep(.5)

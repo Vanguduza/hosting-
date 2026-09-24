@@ -51,6 +51,29 @@ class ReceiptTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "below required minimum"):
                 evaluate("valkey", directory, now=now, instances=set(), min_instances=1)
 
+    def test_openbao_health_requires_current_semantic_restore_and_remote_snapshot(self):
+        now = datetime(2026, 9, 24, tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "evidence"
+            directory.mkdir(mode=0o700)
+            receipt = {"snapshot_id": "a" * 64, "archive_sha256": "b" * 64,
+                       "cluster_id": "disposable-cluster", "probe_path": "dial/data/resources/" + str(uuid.uuid4()),
+                       "probe_sha256": "c" * 64, "probe_version": 1, "state": "RESTORE_VERIFIED",
+                       "created_at": (now - timedelta(hours=1)).isoformat(),
+                       "restore_verified_at": now.isoformat()}
+            path = directory / (receipt["snapshot_id"] + ".json")
+            with self.assertRaisesRegex(RuntimeError, "Missing backup evidence"):
+                evaluate("openbao", directory, now=now)
+            path.write_text(json.dumps(receipt))
+            os.chmod(path, 0o600)
+            with patch("backup_health.remote_snapshot_ids", return_value={"a" * 64}):
+                self.assertEqual(evaluate("openbao", directory, now=now, check_remote=True)["state"],
+                                 "BACKUP_HEALTHY")
+            receipt["state"] = "RESTORE_PENDING_UNSEAL"
+            path.write_text(json.dumps(receipt))
+            with self.assertRaisesRegex(RuntimeError, "lacks verified restore"):
+                evaluate("openbao", directory, now=now)
+
     def test_valkey_backup_offhost_and_probe_contract(self):
         instance = str(uuid.uuid4())
         with tempfile.TemporaryDirectory() as temporary:

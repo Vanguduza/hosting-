@@ -1,0 +1,10 @@
+[Unit]
+Description=Hourly DIAL OpenBao backup freshness check
+
+[Timer]
+OnCalendar=hourly
+Persistent=yes
+Unit=dial-openbao-backup-health.service
+
+[Install]
+WantedBy=timers.target
