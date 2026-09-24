@@ -129,18 +129,22 @@ class DatabaseIntegration(unittest.TestCase):
                 self.assertEqual(handler.releases(conn, org, app, owner, release_body, "POST", uuid.uuid4())[1],
                                  {"error": "application_traffic_not_active"})
         with psycopg.connect(self.worker, row_factory=dict_row, autocommit=True) as conn:
-            with patch("hosting_api.worker.route_request", side_effect=RuntimeError("node unavailable")) as remove:
+            with patch("hosting_api.worker.route_request", side_effect=RuntimeError("node unavailable")) as remove, \
+                    patch("hosting_api.worker.node_application_state") as lifecycle:
                 self.assertTrue(process_traffic_once(conn, {}))
                 remove.assert_called_once()
+                lifecycle.assert_not_called()
             with psycopg.connect(self.admin, row_factory=dict_row) as admin:
                 state = admin.execute("SELECT traffic_state,traffic_last_error FROM hosting.applications WHERE id=%s",
                                       (app,)).fetchone()
                 self.assertEqual((state["traffic_state"], state["traffic_last_error"]),
                                  ("SUSPENDING", "RuntimeError"))
                 admin.execute("UPDATE hosting.applications SET traffic_next_attempt_at=now() WHERE id=%s", (app,))
-            with patch("hosting_api.worker.route_request", return_value={"state": "UNROUTED"}) as remove:
+            with patch("hosting_api.worker.route_request", return_value={"state": "UNROUTED"}) as remove, \
+                    patch("hosting_api.worker.node_application_state", return_value={"state": "PAUSED"}) as lifecycle:
                 self.assertTrue(process_traffic_once(conn, {}))
                 self.assertTrue(remove.call_args.kwargs["remove"])
+                self.assertEqual(lifecycle.call_args.args[3], "pause")
             self.assertFalse(process_traffic_once(conn, {}))
         with psycopg.connect(self.admin, row_factory=dict_row) as conn:
             state = conn.execute("SELECT active_release_id,traffic_state FROM hosting.applications WHERE id=%s",
@@ -167,16 +171,22 @@ class DatabaseIntegration(unittest.TestCase):
                 conn.execute("SELECT set_config('hosting.actor_sub',%s,true)", (owner,))
                 self.assertEqual(handler.traffic(conn, org, app, owner, resume, "POST", uuid.uuid4())[0], 202)
         with psycopg.connect(self.worker, row_factory=dict_row, autocommit=True) as conn:
-            with patch("hosting_api.worker.publish", side_effect=RuntimeError("proof failed")):
+            with patch("hosting_api.worker.publish", side_effect=RuntimeError("proof failed")), \
+                    patch("hosting_api.worker.route_request", return_value={"state": "UNROUTED"}) as remove, \
+                    patch("hosting_api.worker.node_application_state") as lifecycle:
                 self.assertTrue(process_traffic_once(conn, {}))
+                self.assertEqual([call.args[3] for call in lifecycle.call_args_list], ["resume", "pause"])
+                remove.assert_called_once()
             with psycopg.connect(self.admin, row_factory=dict_row) as admin:
                 self.assertEqual(admin.execute("SELECT traffic_state FROM hosting.applications WHERE id=%s",
                                                (app,)).fetchone()["traffic_state"], "RESUMING")
                 admin.execute("UPDATE hosting.applications SET traffic_next_attempt_at=now() WHERE id=%s", (app,))
-            with patch("hosting_api.worker.publish", return_value={"state": "SERVING"}) as proof:
+            with patch("hosting_api.worker.publish", return_value={"state": "SERVING"}) as proof, \
+                    patch("hosting_api.worker.node_application_state") as lifecycle:
                 self.assertTrue(process_traffic_once(conn, {}))
                 self.assertEqual(proof.call_args.args[1]["id"], release)
                 self.assertIsNone(proof.call_args.args[1]["previous_release_id"])
+                self.assertEqual(lifecycle.call_args.args[3], "resume")
         with psycopg.connect(self.admin, row_factory=dict_row) as conn:
             state = conn.execute("SELECT traffic_state,traffic_last_error FROM hosting.applications WHERE id=%s",
                                  (app,)).fetchone()

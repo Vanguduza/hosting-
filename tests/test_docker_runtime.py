@@ -27,6 +27,13 @@ class DockerRuntime(unittest.TestCase):
                 self.assertEqual(node.deploy(first)["state"], "HEALTHY_PRIVATE")
                 self.assertEqual(node.deploy(first)["state"], "HEALTHY_PRIVATE")
                 self.assertEqual(node.observed(app)["release_id"], first_id)
+                lifecycle = {"application_id": app, "release_id": first_id, "port": 8080,
+                             "health_path": "/health", "action": "pause"}
+                self.assertEqual(node.application_state(lifecycle)["state"], "PAUSED")
+                self.assertEqual(node.application_state(lifecycle)["state"], "PAUSED")
+                self.assertEqual(node.observed(app)["state"], "UNREACHABLE")
+                self.assertEqual(node.application_state({**lifecycle, "action": "resume"})["state"], "RESUMED")
+                self.assertEqual(node.observed(app)["state"], "RUNNING_PRIVATE")
                 self.assertEqual(node.deploy(second)["state"], "HEALTHY_PRIVATE")
                 self.assertEqual(node.retire(app, first_id)["state"], "RETIRED")
                 self.assertEqual(node.observed(app)["release_id"], second_id)

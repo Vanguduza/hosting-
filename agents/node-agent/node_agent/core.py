@@ -337,6 +337,48 @@ class Node:
             db.execute("DELETE FROM routes WHERE application_id=?", (app,))
         return {"application_id": app, "release_id": release, "state": "UNROUTED"}
 
+    def application_state(self, data):
+        """Pause/resume only the active labeled container after public routing is absent."""
+        if not isinstance(data, dict) or set(data) != {"application_id", "release_id", "action", "port", "health_path"}:
+            raise ValueError("Invalid application state request")
+        app, release = (str(uuid.UUID(data[key])) for key in ("application_id", "release_id"))
+        if app != data["application_id"] or release != data["release_id"] or \
+                data["action"] not in ("pause", "resume") or \
+                type(data["port"]) is not int or not 1 <= data["port"] <= 65535 or \
+                not isinstance(data["health_path"], str) or not PATH.fullmatch(data["health_path"]):
+            raise ValueError("Invalid application state properties")
+        container = self.container(release)
+        with self.lock, self.file_lock():
+            with self.db() as db:
+                active = db.execute("SELECT release_id FROM active WHERE application_id=?", (app,)).fetchone()
+                routed = db.execute("SELECT release_id FROM routes WHERE application_id=?", (app,)).fetchone()
+            if not active or active["release_id"] != release or routed or (self.routes_dir / (app + ".toml")).exists():
+                raise OperationError("Application route or active release mismatch")
+            try:
+                item = json.loads(self.runner(["docker", "inspect", container], 15))[0]
+                labels = item["Config"]["Labels"]
+                if labels.get("dial.application") != app or labels.get("dial.release") != release:
+                    raise OperationError("Container ownership mismatch")
+                running = item["State"]["Running"]
+            except (ValueError, KeyError, IndexError, TypeError) as exc:
+                raise OperationError("Container inspection invalid") from exc
+            if data["action"] == "pause":
+                if running:
+                    self.runner(["docker", "stop", "--time=10", container], 30)
+                if json.loads(self.runner(["docker", "inspect", container], 15))[0]["State"]["Running"]:
+                    raise OperationError("Container did not stop")
+                return {"application_id": app, "release_id": release, "state": "PAUSED"}
+            if not running:
+                self.runner(["docker", "start", container], 30)
+            deadline = time.monotonic() + 90
+            while time.monotonic() < deadline:
+                running, ip = self.inspect(container)
+                if running and ip and self.health_probe(ip, data["port"], data["health_path"]):
+                    return {"application_id": app, "release_id": release, "state": "RESUMED"}
+                time.sleep(2)
+            self.runner(["docker", "stop", "--time=10", container], 30)
+            raise OperationError("Private application health did not recover")
+
     def abort(self, application_id, release_id, previous_release_id=None):
         """Compensate an unsuccessful release after public routing was restored."""
         app, release = str(uuid.UUID(application_id)), str(uuid.UUID(release_id))

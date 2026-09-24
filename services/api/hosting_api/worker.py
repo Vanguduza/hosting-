@@ -76,6 +76,27 @@ def route_request(node, data, certificate, remove=False):
         connection.close()
 
 
+def node_application_state(node, release, certificate, action):
+    parsed = private_endpoint(node)
+    context = ssl.create_default_context(cafile=certificate["ca"])
+    context.load_cert_chain(certificate["cert"], certificate["key"])
+    connection = http.client.HTTPSConnection(parsed.hostname, parsed.port, context=context, timeout=120)
+    try:
+        payload = {"application_id": str(release["application_id"]), "release_id": str(release["id"]),
+                   "action": action, "port": release["port"], "health_path": release["health_path"]}
+        connection.request("PUT", "/v1/application-state", body=json.dumps(payload, separators=(",", ":")),
+                           headers={"Content-Type": "application/json"})
+        response = connection.getresponse()
+        receipt = json.loads(response.read(4096))
+        if (response.status != 200 or receipt.get("application_id") != payload["application_id"] or
+                receipt.get("release_id") != payload["release_id"] or
+                receipt.get("state") != ("PAUSED" if action == "pause" else "RESUMED")):
+            raise RuntimeError("Node application state change was not proven")
+        return receipt
+    finally:
+        connection.close()
+
+
 def deliver_secrets(node, resource_id, version, certificate, bao=None):
     """Retrieve one exact OpenBao revision and install it over private mTLS."""
     bao = bao or OpenBao.environment()
@@ -265,8 +286,17 @@ def process_traffic_once(conn, certificate):
             if row["traffic_state"] == "SUSPENDING":
                 route_request(row, {"application_id": str(row["application_id"]),
                                     "release_id": str(row["active_release_id"])}, certificate, remove=True)
+                node_application_state(row, release, certificate, "pause")
             else:
-                publish(row, release, row, certificate)
+                node_application_state(row, release, certificate, "resume")
+                try:
+                    publish(row, release, row, certificate)
+                except Exception:
+                    # Public proof failure must leave the workload stopped again.
+                    route_request(row, {"application_id": str(row["application_id"]),
+                                        "release_id": str(row["active_release_id"])}, certificate, remove=True)
+                    node_application_state(row, release, certificate, "pause")
+                    raise
         finalize_traffic(conn, row, token)
     except Exception as exc:
         finalize_traffic(conn, row, token, error=type(exc).__name__)
