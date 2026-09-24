@@ -98,6 +98,17 @@ def record(conn, org_id, actor, action, resource, request_id):
     )
 
 
+def audit_after(query):
+    if not query:
+        return 0
+    if not re.fullmatch(r"after=(0|[1-9][0-9]{0,18})", query):
+        raise ValueError("Invalid audit cursor")
+    value = int(query[6:])
+    if value > 9223372036854775807:
+        raise ValueError("Invalid audit cursor")
+    return value
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "DialHosting/0.1"
 
@@ -116,6 +127,27 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         self.handle_request("POST")
+
+    def audit(self, conn, org_id, actor, after):
+        if not allowed(self.membership(conn, org_id, actor), "audit:read"):
+            return 404, {"error": "not_found"}
+        predecessor = conn.execute(
+            "SELECT event_hash FROM hosting.audit_events WHERE organization_id=%s AND id<=%s "
+            "ORDER BY id DESC LIMIT 1", (org_id, after)).fetchone()
+        previous = predecessor["event_hash"] if predecessor else ""
+        rows = conn.execute(
+            "SELECT id,actor_sub,action,resource_id,request_id,previous_hash,event_hash,created_at "
+            "FROM hosting.audit_events WHERE organization_id=%s AND id>%s ORDER BY id LIMIT 101",
+            (org_id, after)).fetchall()
+        for row in rows:
+            calculated = hashlib.sha256((previous + row["actor_sub"] + row["action"] +
+                                         str(row["resource_id"]) + str(row["request_id"])).encode()).hexdigest()
+            if row["previous_hash"] != previous or row["event_hash"] != calculated:
+                raise RuntimeError("Tenant audit chain integrity check failed")
+            previous = row["event_hash"]
+        page = rows[:100]
+        return 200, {"events": page, "next_after": page[-1]["id"] if page else after,
+                     "has_more": len(rows) > 100}
 
     def membership(self, conn, org_id, actor):
         row = conn.execute(
@@ -704,7 +736,8 @@ class Handler(BaseHTTPRequestHandler):
         return 202, {"id": instance_id, "job_id": job_id, "state": "QUEUED", "request_id": request_id}
 
     def handle_request(self, method):
-        path = urlsplit(self.path).path
+        parsed_url = urlsplit(self.path)
+        path = parsed_url.path
         if path == "/live" and method == "GET":
             return self.reply(200, {"status": "process_alive"})
         if path == "/openapi.json" and method == "GET":
@@ -743,6 +776,10 @@ class Handler(BaseHTTPRequestHandler):
                             (actor,),
                         ).fetchall()
                         result = (200, {"organizations": rows})
+                    elif method == "GET" and (match := re.fullmatch(
+                            r"/v1/organizations/([0-9a-f-]{36})/audit", path)):
+                        result = self.audit(conn, uuid.UUID(match.group(1)), actor,
+                                            audit_after(parsed_url.query))
                     elif path == "/v1/team/invitations/accept" and method == "POST":
                         result = self.accept_invitation(conn, actor, body, request_id)
                     elif match := re.fullmatch(r"/v1/organizations/([0-9a-f-]{36})/service-accounts(/revoke)?", path):

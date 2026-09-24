@@ -1,0 +1,7 @@
+# Tenant audit readback
+
+`GET /v1/organizations/{organization_id}/audit` returns up to 100 committed audit events in ascending global event ID order. Human owner, admin and viewer membership can read only its organization. Service tokens cannot use this route. Each row contains `id`, `actor_sub`, `action`, `resource_id`, `request_id`, `previous_hash`, `event_hash` and `created_at`. The result also includes `next_after` and `has_more`. Continue with `?after=<next_after>` until `has_more` is false; the cursor is exclusive, decimal and bounded to a signed 64-bit integer. The operator CLI supports `audit <org UUID> --after <event ID>`.
+
+The API recomputes every returned SHA256 link, including the extra row used for pagination, and checks the preceding row for that tenant before releasing the page. A broken link returns service unavailable and should be investigated from an independent control database backup. The hash covers the preceding hash, actor, action, resource UUID and request UUID in that order. Event IDs can have gaps because the identity sequence is global. `request_id` is unique, so a repeated command with the same idempotency key does not imply a second event.
+
+This readback does not provide an external anchor against a privileged database administrator who rewrites an entire chain, and it is not a delivery outbox for billing, notifications or webhooks. Read an external backup and compare its last known hash when investigating privileged tampering. Retention and signed checkpoints remain separate work.

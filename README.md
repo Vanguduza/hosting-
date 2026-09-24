@@ -2,7 +2,7 @@
 
 This repository binds the DIAL hosting blueprint to source control and contains implemented control-plane contracts. The attached [Rev 1 blueprint](development-pack/BLUEPRINT_REV_1.md) remains the requirements source; [Review Rev 2](development-pack/REVIEW_REV_2.md) records corrections and execution gates.
 
-The private control API exposes its currently implemented OpenAPI 3.1 contract at `GET /openapi.json` without a bearer token. It lists only existing routes and validates in CI; it is a client integration contract, not evidence of production qualification. `DU-005` remains partial because a production API gateway and external ingress policy are not installed.
+The private control API exposes its currently implemented OpenAPI 3.1 contract at `GET /openapi.json` without a bearer token. It lists only existing routes and validates in CI; it is a client integration contract, not evidence of production qualification. The [tenant audit readback](docs/AUDIT_READBACK.md) verifies hash links during cursor pagination. `DU-005` remains partial because a production API gateway and external ingress policy are not installed.
 
 `python3 tools/hosting_cli.py --base-url https://control.example:443 --token-file /private/control.jwt orgs` runs the operator client against the implemented control API. It accepts an owner-only OIDC token file for the API audience, verifies TLS, refuses cross-origin redirects, and reports an idempotency key for commands that can be retried. Run `--help` for the implemented commands; authentication and production ingress remain separate deployment gates.
 

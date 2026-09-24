@@ -99,7 +99,7 @@ class CliTests(unittest.TestCase):
         one, two, three, four = (str(uuid.uuid4()) for _ in range(4))
         samples = {
             "live": [], "ready": [], "openapi": [], "orgs": [],
-            "projects": [one], "project-create": [one, "alpha"],
+            "audit": [one], "projects": [one], "project-create": [one, "alpha"],
             "applications": [one, two], "application-create": [one, two, "api", "production"],
             "traffic": [one, three], "suspend": [one, three, "Owner requested pause"],
             "resume": [one, three, "Owner requested resume"],
@@ -124,6 +124,9 @@ class CliTests(unittest.TestCase):
                 self.assertIn("post" if body is not None else "get", paths[matching[0]])
                 if name in ("team-invite", "release-queue", "rollback", "postgres-create", "valkey-create"):
                     self.assertEqual(body["idempotency_key"], key)
+        args = parser().parse_args(["--base-url", "https://control.example:443", "audit", one,
+                                    "--after", "42"])
+        self.assertEqual(request_for(args)[0], f"/v1/organizations/{one}/audit?after=42")
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "invitation"
             path.write_text("A" * 43)

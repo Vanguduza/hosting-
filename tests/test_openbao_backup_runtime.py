@@ -86,6 +86,16 @@ class RaftRecovery(unittest.TestCase):
                         time.sleep(.5)
                 init = request(port, "PUT", "sys/init", payload={"secret_shares": 1, "secret_threshold": 1})
                 request(port, "PUT", "sys/unseal", payload={"key": init["keys"][0]})
+                deadline = time.monotonic() + 30
+                while True:
+                    try:
+                        if request(port, "GET", "sys/health").get("sealed") is False:
+                            break
+                    except urllib.error.HTTPError:
+                        pass
+                    if time.monotonic() > deadline:
+                        raise RuntimeError("Disposable Raft authority did not become healthy")
+                    time.sleep(.5)
                 return init
 
             try:
@@ -98,6 +108,17 @@ class RaftRecovery(unittest.TestCase):
                 os.chmod(target_token, 0o600)
                 request(18210, "POST", "sys/mounts/dial", source["root_token"],
                         {"type": "kv", "options": {"version": "2"}})
+                deadline = time.monotonic() + 20
+                while True:
+                    try:
+                        mounted = request(18210, "GET", "sys/mounts", source["root_token"])
+                        if mounted.get("data", {}).get("dial/", {}).get("options", {}).get("version") == "2":
+                            break
+                    except urllib.error.HTTPError:
+                        pass
+                    if time.monotonic() > deadline:
+                        raise RuntimeError("Disposable KV v2 mount did not become ready")
+                    time.sleep(.5)
                 path = "dial/data/resources/" + str(uuid.uuid4())
                 data = {"recovery_canary": secrets.token_hex(24)}
                 request(18210, "POST", path, source["root_token"], {"data": data})

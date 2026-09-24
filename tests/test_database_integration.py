@@ -18,7 +18,7 @@ from psycopg.rows import dict_row
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "services/api"))
 sys.path.insert(0, str(ROOT / "tools"))
-from hosting_api.__main__ import Handler
+from hosting_api.__main__ import Handler, record, audit_after
 from hosting_api.worker import claim, finalize, sweep_retirements, sweep_failed, process_traffic_once
 from hosting_api.postgres_jobs import claim as claim_postgres, finalize as finalize_postgres
 from hosting_api.valkey_jobs import claim as claim_valkey, finalize as finalize_valkey
@@ -91,6 +91,41 @@ class DatabaseIntegration(unittest.TestCase):
                 self.assertIsNone(conn.execute("SELECT to_regclass('hosting.rollback_probe')").fetchone()[0])
                 self.assertEqual(conn.execute("SELECT count(*) FROM hosting.schema_migrations").fetchone()[0], 16)
                 verify_migrations(conn)
+
+    def test_tenant_audit_readback_cursor_and_chain(self):
+        org, resource = uuid.uuid4(), uuid.uuid4()
+        owner, viewer = "audit-owner-" + org.hex, "audit-viewer-" + org.hex
+        with psycopg.connect(self.admin) as conn:
+            conn.execute("INSERT INTO hosting.organizations(id,name) VALUES (%s,'audit-readback')", (org,))
+            conn.execute("INSERT INTO hosting.memberships(organization_id,actor_sub,role) "
+                         "VALUES (%s,%s,'owner'),(%s,%s,'viewer')", (org, owner, org, viewer))
+        handler = Handler.__new__(Handler)
+        with psycopg.connect(self.api, row_factory=dict_row) as conn:
+            with conn.transaction():
+                conn.execute("SELECT set_config('hosting.actor_sub',%s,true)", (owner,))
+                record(conn, org, owner, "audit.first", resource, uuid.uuid4())
+                record(conn, org, owner, "audit.second", resource, uuid.uuid4())
+                code, result = handler.audit(conn, org, owner, audit_after(""))
+                self.assertEqual(code, 200)
+                self.assertEqual([row["action"] for row in result["events"]],
+                                 ["audit.first", "audit.second"])
+                self.assertEqual(result["events"][0]["previous_hash"], "")
+                first_id = result["events"][0]["id"]
+                self.assertEqual([row["action"] for row in handler.audit(conn, org, owner, first_id)[1]["events"]],
+                                 ["audit.second"])
+                self.assertEqual(handler.audit(conn, self.org_b, owner, 0)[0], 404)
+            with conn.transaction():
+                conn.execute("SELECT set_config('hosting.actor_sub',%s,true)", (viewer,))
+                self.assertEqual(handler.audit(conn, org, viewer, 0)[0], 200)
+        for invalid in ("after=-1", "after=01", "after=1&after=2", "other=3", "after=9223372036854775808"):
+            with self.subTest(cursor=invalid), self.assertRaises(ValueError):
+                audit_after(invalid)
+        with psycopg.connect(self.admin, row_factory=dict_row) as conn:
+            conn.execute("UPDATE hosting.audit_events SET event_hash=%s WHERE organization_id=%s AND id=%s",
+                         ("0" * 64, org, first_id))
+            with self.assertRaisesRegex(RuntimeError, "integrity"):
+                handler.audit(conn, org, owner, 0)
+            conn.rollback()
 
     def test_service_account_application_scope_and_revoke(self):
         app, other_app = uuid.uuid4(), uuid.uuid4()

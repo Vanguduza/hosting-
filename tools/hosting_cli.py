@@ -87,7 +87,7 @@ def parser():
     commands = result.add_subparsers(dest="command", required=True)
     arguments = {
         "live": (), "ready": (), "openapi": (), "orgs": (),
-        "projects": ("org",), "project-create": ("org", "name"),
+        "audit": ("org",), "projects": ("org",), "project-create": ("org", "name"),
         "applications": ("org", "project"),
         "application-create": ("org", "project", "name", "environment"),
         "traffic": ("org", "app"), "suspend": ("org", "app", "reason"),
@@ -114,6 +114,8 @@ def parser():
             command.add_argument("--idempotency-key", type=identifier)
         if name == "team-accept":
             command.add_argument("--invitation-file", required=True, help="Owner-only invitation token file")
+        if name == "audit":
+            command.add_argument("--after", type=int, default=0, help="Exclusive committed event ID cursor")
     return result
 
 
@@ -125,6 +127,10 @@ def request_for(args):
     if name == "team-accept":
         return "/v1/team/invitations/accept", {"token": private_file(args.invitation_file, "Invitation token")}, None
     org = "/v1/organizations/" + identifier(args.org)
+    if name == "audit":
+        if not 0 <= args.after <= 9223372036854775807:
+            raise ValueError("Audit cursor out of range")
+        return org + "/audit" + ("?after=" + str(args.after) if args.after else ""), None, None
     if name in ("service-accounts", "service-grant", "service-revoke"):
         path = org + "/service-accounts"
         if name == "service-revoke":
