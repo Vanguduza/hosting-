@@ -81,14 +81,14 @@ class DatabaseIntegration(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             destination = Path(temporary) / "schema"
             shutil.copytree(ROOT / "services/api/schema", destination)
-            (destination / "014_rollback_probe.sql").write_text(
+            (destination / "015_rollback_probe.sql").write_text(
                 "CREATE TABLE hosting.rollback_probe(id integer);\n"
                 "SELECT 1 / 0;\n", encoding="utf-8")
             with psycopg.connect(self.admin, autocommit=True) as conn:
                 with self.assertRaises(psycopg.errors.DivisionByZero):
                     apply_migrations(conn, destination)
                 self.assertIsNone(conn.execute("SELECT to_regclass('hosting.rollback_probe')").fetchone()[0])
-                self.assertEqual(conn.execute("SELECT count(*) FROM hosting.schema_migrations").fetchone()[0], 13)
+                self.assertEqual(conn.execute("SELECT count(*) FROM hosting.schema_migrations").fetchone()[0], 14)
                 verify_migrations(conn)
 
     def test_application_suspension_and_verified_resume(self):
@@ -152,6 +152,18 @@ class DatabaseIntegration(unittest.TestCase):
             self.assertEqual((state["active_release_id"], state["traffic_state"]), (release, "SUSPENDED"))
             self.assertEqual(conn.execute("SELECT count(*) FROM hosting.application_traffic_events "
                                           "WHERE application_id=%s", (app,)).fetchone()["count"], 1)
+            conn.execute("UPDATE hosting.applications SET traffic_next_attempt_at=now() WHERE id=%s", (app,))
+        with psycopg.connect(self.worker, row_factory=dict_row, autocommit=True) as conn:
+            with patch("hosting_api.worker.route_request", return_value={"state": "UNROUTED"}) as remove, \
+                    patch("hosting_api.worker.node_application_state", return_value={"state": "PAUSED"}) as lifecycle:
+                self.assertTrue(process_traffic_once(conn, {}))
+                self.assertTrue(remove.call_args.kwargs["remove"])
+                self.assertEqual(lifecycle.call_args.args[3], "pause")
+            self.assertFalse(process_traffic_once(conn, {}))
+        with psycopg.connect(self.admin, row_factory=dict_row) as conn:
+            self.assertEqual(conn.execute("SELECT count(*) FROM hosting.audit_events "
+                                          "WHERE organization_id=%s AND action='application.suspended'",
+                                          (org,)).fetchone()["count"], 1)
             failed = uuid.uuid4()
             conn.execute("INSERT INTO hosting.releases(id,organization_id,application_id,node_id,requested_by,"
                          "idempotency_key,image,port,health_path,memory_mb,cpu_milli,state,previous_release_id) "

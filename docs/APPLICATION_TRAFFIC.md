@@ -10,6 +10,8 @@ The worker retries a failed route operation and exposes its error category in
 `traffic_last_error`. An application without an active release reaches
 `SUSPENDED` without a node operation. The stopped application container,
 running managed data services, backups and capacity reservations are retained.
+The worker rechecks suspended routes and container state every minute; a
+failed recheck is visible in `traffic_last_error` and retried sooner.
 New releases and rollbacks are
 blocked during suspension; outstanding releases must finish before suspension
 can be requested.

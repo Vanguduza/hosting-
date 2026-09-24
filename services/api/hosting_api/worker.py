@@ -234,10 +234,11 @@ def claim_traffic(conn):
             "LEFT JOIN hosting.releases r ON r.id=a.active_release_id "
             "LEFT JOIN hosting.nodes n ON n.id=r.node_id "
             "LEFT JOIN hosting.domains d ON d.application_id=a.id "
-            "WHERE a.traffic_state IN ('SUSPENDING','RESUMING') "
+            "WHERE a.traffic_state IN ('SUSPENDING','RESUMING','SUSPENDED') "
             "AND a.traffic_next_attempt_at <= now() "
             "AND (a.traffic_lease_until IS NULL OR a.traffic_lease_until < now()) "
-            "ORDER BY a.traffic_next_attempt_at,a.id FOR UPDATE OF a SKIP LOCKED LIMIT 1"
+            "ORDER BY CASE WHEN a.traffic_state='SUSPENDED' THEN 1 ELSE 0 END,"
+            "a.traffic_next_attempt_at,a.id FOR UPDATE OF a SKIP LOCKED LIMIT 1"
         ).fetchone()
         if not row:
             return None
@@ -259,13 +260,15 @@ def finalize_traffic(conn, row, token, error=None):
                 "WHERE id=%s AND traffic_state=%s AND traffic_lease_token=%s RETURNING id",
                 (str(error)[:120], row["application_id"], state, token)).fetchone()
             return bool(changed)
-        target = "SUSPENDED" if state == "SUSPENDING" else "ACTIVE"
+        target = "SUSPENDED" if state in ("SUSPENDING", "SUSPENDED") else "ACTIVE"
         changed = conn.execute(
             "UPDATE hosting.applications SET traffic_state=%s,traffic_lease_token=NULL,traffic_lease_until=NULL,"
-            "traffic_last_error=NULL,traffic_updated_at=now() "
+            "traffic_last_error=NULL,"
+            "traffic_updated_at=CASE WHEN %s='SUSPENDED' THEN traffic_updated_at ELSE now() END,"
+            "traffic_next_attempt_at=CASE WHEN %s='SUSPENDED' THEN now()+interval '1 minute' ELSE now() END "
             "WHERE id=%s AND traffic_state=%s AND traffic_lease_token=%s RETURNING id",
-            (target, row["application_id"], state, token)).fetchone()
-        if changed:
+            (target, state, target, row["application_id"], state, token)).fetchone()
+        if changed and state != "SUSPENDED":
             conn.execute("SELECT set_config('hosting.actor_sub',%s,true)", (row["traffic_requested_by"],))
             record(conn, row["organization_id"], row["traffic_requested_by"],
                    "application." + target.lower(), row["application_id"], uuid.uuid4())
@@ -283,7 +286,7 @@ def process_traffic_once(conn, certificate):
                 raise RuntimeError("Suspended application's node is unavailable")
             release = {"id": row["active_release_id"], "application_id": row["application_id"],
                        "port": row["port"], "health_path": row["health_path"], "previous_release_id": None}
-            if row["traffic_state"] == "SUSPENDING":
+            if row["traffic_state"] in ("SUSPENDING", "SUSPENDED"):
                 route_request(row, {"application_id": str(row["application_id"]),
                                     "release_id": str(row["active_release_id"])}, certificate, remove=True)
                 node_application_state(row, release, certificate, "pause")
