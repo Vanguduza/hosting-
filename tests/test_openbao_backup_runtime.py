@@ -64,6 +64,8 @@ class RaftRecovery(unittest.TestCase):
                                   'tls_cert_file = "/tls/cert.pem" tls_key_file = "/tls/key.pem" }\n')
                 os.chmod(config, 0o644)
                 docker("volume", "create", name)
+                docker("run", "--rm", "--user", "0:0", "--entrypoint", "chown", "-v", f"{name}:/data",
+                       os.environ["OPENBAO_TEST_IMAGE"], "-R", "openbao:openbao", "/data")
                 docker("run", "-d", "--name", name, "--user", "0:0", "-p", f"127.0.0.1:{port}:8200",
                        "-v", f"{name}:/data", "-v", f"{config}:/etc/openbao/server.hcl:ro",
                        "-v", f"{root}:/tls:ro", os.environ["OPENBAO_TEST_IMAGE"],
