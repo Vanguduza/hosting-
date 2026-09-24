@@ -3,7 +3,7 @@
 This profile runs Traefik on the selected application node. The operator supplies
 an immutable Traefik v3 image digest and an ACME account email; the installer
 does not need a Docker socket inside Traefik. The node agent writes one validated
-file-provider document per application. Each HTTPS response includes
+file-provider document per application. Each successful application response includes
 `X-Dial-Release`, and the worker verifies that header over a trusted TLS
 connection to the registered public node IP before committing `SERVING`.
 Each application route has a Traefik rate limit of 20 requests per second per
