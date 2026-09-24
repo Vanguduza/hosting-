@@ -44,8 +44,9 @@ class IngressRuntime(unittest.TestCase):
                             "-addext", "subjectAltName=DNS:" + host,
                             "-keyout", str(root / "certs/tls.key"), "-out", str(root / "certs/tls.crt")],
                            check=True, capture_output=True, timeout=30)
-            (root / "routes/app.toml").write_text(route_toml(app, release, host, app_container, 8080,
-                                                               average=1, burst=2, period="60s"))
+            route_file = root / "routes/app.toml"
+            route_file.write_text(route_toml(app, release, host, app_container, 8080,
+                                             average=1, burst=2, period="60s"))
             (root / "routes/cert.toml").write_text('[[tls.certificates]]\ncertFile = "/certs/tls.crt"\nkeyFile = "/certs/tls.key"\n')
             with socket.socket() as port_socket:
                 port_socket.bind(("127.0.0.1", 0))
@@ -76,37 +77,42 @@ class IngressRuntime(unittest.TestCase):
                        "--certificatesresolvers.acme.acme.httpchallenge.entrypoint=web")
                 docker("network", "connect", app_network, ingress_container)
                 context = ssl.create_default_context(cafile=str(root / "certs/tls.crt"))
+                def probe(extra_header=""):
+                    with socket.create_connection(("127.0.0.1", port), timeout=2) as peer:
+                        with context.wrap_socket(peer, server_hostname=host) as tls:
+                            tls.settimeout(2)
+                            tls.sendall((f"GET /health HTTP/1.1\r\nHost: {host}\r\n"
+                                         + extra_header + "Connection: close\r\n\r\n").encode())
+                            response = http.client.HTTPResponse(tls)
+                            response.begin()
+                            response.read(1024)
+                            return response.status, response.getheader("X-Dial-Release")
+
                 deadline = time.monotonic() + 12
                 while True:
                     try:
-                        with socket.create_connection(("127.0.0.1", port), timeout=2) as raw:
-                            with context.wrap_socket(raw, server_hostname=host) as tls:
-                                tls.settimeout(2)
-                                tls.sendall(f"GET /health HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n".encode())
-                                response = http.client.HTTPResponse(tls)
-                                response.begin()
-                                response.read(1024)
-                                self.assertEqual(response.status, 200)
-                                self.assertEqual(response.getheader("X-Dial-Release"), release)
-                                statuses = []
-                                for index in range(8):
-                                    with socket.create_connection(("127.0.0.1", port), timeout=2) as peer:
-                                        with context.wrap_socket(peer, server_hostname=host) as next_tls:
-                                            next_tls.settimeout(2)
-                                            next_tls.sendall((f"GET /health HTTP/1.1\r\nHost: {host}\r\n"
-                                                              f"X-Forwarded-For: 198.51.100.{index + 1}\r\n"
-                                                              "Connection: close\r\n\r\n").encode())
-                                            next_response = http.client.HTTPResponse(next_tls)
-                                            next_response.begin()
-                                            next_response.read(1024)
-                                            statuses.append(next_response.status)
-                                self.assertIn(429, statuses, "Client-controlled forwarding header bypassed rate limit")
-                                return
+                        status, header = probe()
+                        self.assertEqual((status, header), (200, release))
+                        break
                     except (OSError, ssl.SSLError, http.client.HTTPException):
                         if time.monotonic() >= deadline:
                             self.fail("Traefik TLS route did not become available:\n" +
                                       docker("logs", ingress_container)[-12000:])
                         time.sleep(1)
+                route_file.unlink()
+                deadline = time.monotonic() + 12
+                while time.monotonic() < deadline and probe()[0] != 404:
+                    time.sleep(0.25)
+                self.assertEqual(probe()[0], 404, "Removed route still serves application")
+                route_file.write_text(route_toml(app, release, host, app_container, 8080,
+                                                 average=1, burst=2, period="60s"))
+                deadline = time.monotonic() + 12
+                while time.monotonic() < deadline and probe() != (200, release):
+                    time.sleep(0.25)
+                self.assertEqual(probe(), (200, release), "Restored route did not serve release")
+                statuses = [probe(f"X-Forwarded-For: 198.51.100.{index + 1}\r\n")[0]
+                            for index in range(8)]
+                self.assertIn(429, statuses, "Client-controlled forwarding header bypassed rate limit")
             finally:
                 subprocess.run(["docker", "rm", "-f", ingress_container, app_container, other_container], capture_output=True)
                 subprocess.run(["docker", "network", "rm", app_network, other_network], capture_output=True)
