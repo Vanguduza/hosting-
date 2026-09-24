@@ -178,6 +178,18 @@ class DatabaseIntegration(unittest.TestCase):
             conn.execute("UPDATE hosting.releases SET cleanup_at=now() WHERE id=%s", (failed,))
         resume = {"action": "resume", "reason": "Owner completed review",
                   "confirm": "resume_application"}
+        with psycopg.connect(self.admin) as conn:
+            conn.execute("UPDATE hosting.applications SET traffic_lease_token=%s,"
+                         "traffic_lease_until=now()+interval '1 minute' WHERE id=%s",
+                         (uuid.uuid4(), app))
+        with psycopg.connect(self.api, row_factory=dict_row) as conn:
+            with conn.transaction():
+                conn.execute("SELECT set_config('hosting.actor_sub',%s,true)", (owner,))
+                self.assertEqual(handler.traffic(conn, org, app, owner, resume, "POST", uuid.uuid4())[1],
+                                 {"error": "traffic_reconciliation_in_progress"})
+        with psycopg.connect(self.admin) as conn:
+            conn.execute("UPDATE hosting.applications SET traffic_lease_token=NULL,traffic_lease_until=NULL "
+                         "WHERE id=%s", (app,))
         with psycopg.connect(self.api, row_factory=dict_row) as conn:
             with conn.transaction():
                 conn.execute("SELECT set_config('hosting.actor_sub',%s,true)", (owner,))

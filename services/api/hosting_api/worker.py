@@ -445,14 +445,15 @@ def recover_expired(conn):
 
 
 def process_once(conn, certificate):
+    # Public containment takes priority over slow node probes and provisioning.
+    if process_traffic_once(conn, certificate):
+        return True
     refresh_nodes(conn, certificate)
     from .postgres_jobs import process_once as process_postgres
     from .valkey_jobs import process_once as process_valkey
     if process_postgres(conn, certificate):
         return True
     if process_valkey(conn, certificate):
-        return True
-    if process_traffic_once(conn, certificate):
         return True
     sweep_failed(conn, certificate)
     sweep_retirements(conn, certificate)

@@ -283,6 +283,10 @@ class Handler(BaseHTTPRequestHandler):
             return 200, {"state": state, "replayed": True}
         if state != ("ACTIVE" if action == "suspend" else "SUSPENDED"):
             return 409, {"error": "traffic_transition_in_progress"}
+        if action == "resume" and conn.execute(
+                "SELECT 1 FROM hosting.applications WHERE id=%s AND traffic_lease_until>now()",
+                (app_id,)).fetchone():
+            return 409, {"error": "traffic_reconciliation_in_progress"}
         if action == "suspend" and conn.execute(
                 "SELECT 1 FROM hosting.releases WHERE application_id=%s AND state IN ('QUEUED','DEPLOYING')",
                 (app_id,)).fetchone():
