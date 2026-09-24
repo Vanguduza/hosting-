@@ -53,8 +53,8 @@ def provision(node, data):
     application = identifier(data["application_id"])
     if (type(data["memory_mb"]) is not int or not 256 <= data["memory_mb"] <= 32768 or
             type(data["cpu_milli"]) is not int or not 100 <= data["cpu_milli"] <= 32000 or
-            type(data["secret_version"]) is not int or data["secret_version"] < 1):
-        raise ValueError("Invalid PostgreSQL resource allocation")
+            type(data["secret_version"]) is not int or data["secret_version"] != 1):
+        raise ValueError("Invalid PostgreSQL resource allocation or unsupported credential revision")
     image = os.environ.get("NODE_POSTGRES_IMAGE", "")
     if not IMAGE.fullmatch(image) or not image.rsplit("/", 1)[-1].startswith("postgres:"):
         raise OperationError("PostgreSQL image must be digest pinned and configured")

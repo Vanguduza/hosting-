@@ -134,6 +134,11 @@ class PostgresRuntime(unittest.TestCase):
                     self.assertEqual(conn.execute("SELECT value FROM durable_test").fetchone()[0], 42)
                 with self.assertRaises(OperationError):
                     provision(node, {**payload, "application_id": str(uuid.uuid4())})
+                node.deliver_secrets({"resource_id": instance, "version": 2,
+                                      "values": {"postgres_password": "D" * 48,
+                                                 "app_password": "E" * 48}})
+                with self.assertRaisesRegex(ValueError, "unsupported credential revision"):
+                    provision(node, {**payload, "secret_version": 2})
                 subprocess.run(["docker", "network", "disconnect", network, container],
                                check=True, capture_output=True)
                 with self.assertRaises(OperationError):
