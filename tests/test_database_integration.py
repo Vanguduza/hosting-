@@ -77,6 +77,20 @@ class DatabaseIntegration(unittest.TestCase):
                 with self.assertRaises(psycopg.errors.InsufficientPrivilege):
                     conn.execute("DELETE FROM hosting.schema_migrations")
 
+    def test_failed_migration_rolls_back_schema_and_history(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary) / "schema"
+            shutil.copytree(ROOT / "services/api/schema", destination)
+            (destination / "013_rollback_probe.sql").write_text(
+                "CREATE TABLE hosting.rollback_probe(id integer);\n"
+                "SELECT 1 / 0;\n", encoding="utf-8")
+            with psycopg.connect(self.admin, autocommit=True) as conn:
+                with self.assertRaises(psycopg.errors.DivisionByZero):
+                    apply_migrations(conn, destination)
+                self.assertIsNone(conn.execute("SELECT to_regclass('hosting.rollback_probe')").fetchone()[0])
+                self.assertEqual(conn.execute("SELECT count(*) FROM hosting.schema_migrations").fetchone()[0], 12)
+                verify_migrations(conn)
+
     def test_rls_and_durable_release(self):
         handler = Handler.__new__(Handler)
         with psycopg.connect(self.api, row_factory=dict_row) as conn:
