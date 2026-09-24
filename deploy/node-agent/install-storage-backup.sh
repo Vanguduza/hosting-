@@ -27,8 +27,12 @@ python3 -m venv /opt/dial-hosting/storage-backup
 /opt/dial-hosting/storage-backup/bin/python -m pip install --disable-pip-version-check 'boto3==1.43.101'
 install -o root -g root -m 0755 "$repo_root/tools/storage_backup.py" /opt/dial-hosting/storage_backup.py
 install -o root -g root -m 0755 "$repo_root/tools/postgres_backup.py" /opt/dial-hosting/postgres_backup.py
+install -o root -g root -m 0755 "$repo_root/tools/backup_health.py" /opt/dial-hosting/backup_health.py
 install -o root -g root -m 0644 "$script_dir/dial-storage-backup.service" /etc/systemd/system/
 install -o root -g root -m 0644 "$script_dir/dial-storage-backup.timer" /etc/systemd/system/
+install -o root -g root -m 0644 "$script_dir/dial-backup-health@.service" /etc/systemd/system/
+install -o root -g root -m 0644 "$script_dir/dial-backup-health@.timer" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now dial-storage-backup.timer
+systemctl enable --now dial-backup-health@storage.timer
 systemctl --no-pager list-timers dial-storage-backup.timer

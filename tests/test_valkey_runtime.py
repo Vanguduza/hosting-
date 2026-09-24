@@ -96,6 +96,7 @@ class ValkeyRuntime(unittest.TestCase):
                 if os.environ.get("VALKEY_RUNTIME_BACKUP"):
                     sys.path.insert(0, str(ROOT / "tools"))
                     from valkey_backup import backup_all, configuration, restore_drill
+                    from backup_health import evaluate
                     folders = {key: Path(temp) / folder for key, folder in (
                         ("BACKUP_EVIDENCE_DIR", "evidence"), ("BACKUP_TMP_DIR", "backup-tmp"),
                         ("BACKUP_PROBE_DIR", "probes"))}
@@ -124,6 +125,7 @@ class ValkeyRuntime(unittest.TestCase):
                         snapshot = result["receipts"][0]["snapshot_id"]
                         self.assertEqual(json.loads((evidence / (snapshot + ".json")).read_text())["state"],
                                          "RESTORE_VERIFIED")
+                        self.assertEqual(evaluate("valkey", evidence)["state"], "BACKUP_HEALTHY")
                         contract = json.loads(probe_file.read_text())
                         contract["sha256"] = "0" * 64
                         probe_file.write_text(json.dumps(contract))

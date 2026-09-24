@@ -25,8 +25,12 @@ install -o root -g root -m 0644 "$repo_root"/agents/node-agent/node_agent/*.py /
 install -o root -g root -m 0755 "$repo_root/tools/postgres_backup.py" /opt/dial-hosting/postgres_backup.py
 install -o root -g root -m 0755 "$repo_root/tools/storage_backup.py" /opt/dial-hosting/storage_backup.py
 install -o root -g root -m 0755 "$repo_root/tools/valkey_backup.py" /opt/dial-hosting/valkey_backup.py
+install -o root -g root -m 0755 "$repo_root/tools/backup_health.py" /opt/dial-hosting/backup_health.py
 install -o root -g root -m 0644 "$script_dir/dial-valkey-backup.service" /etc/systemd/system/
 install -o root -g root -m 0644 "$script_dir/dial-valkey-backup.timer" /etc/systemd/system/
+install -o root -g root -m 0644 "$script_dir/dial-backup-health@.service" /etc/systemd/system/
+install -o root -g root -m 0644 "$script_dir/dial-backup-health@.timer" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now dial-valkey-backup.timer
+systemctl enable --now dial-backup-health@valkey.timer
 systemctl --no-pager list-timers dial-valkey-backup.timer
