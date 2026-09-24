@@ -1,0 +1,9 @@
+# Operator-set reservation quotas
+
+Migration 020 adds an optional hard ceiling for each organization's simultaneously reserved milliCPU and MiB. The capacity_intervals insert trigger checks the sum of open intervals in the same transaction as node reservation and resource creation. Competing admissions for one organization serialize on a transaction-scoped database lock. A rejected admission rolls back the node reservation and resource row and returns HTTP 409 quota_exceeded. Existing reservations are never silently evicted. Lowering a ceiling below existing reservations is rejected.
+
+Assign a ceiling using protected operator database credentials, never an API or worker role. Run tools/set_quota.py with an organization UUID, --cpu-milli, --memory-mb, --operator, --reason and --confirm set_quota.
+
+The operator name, reason, limits and timestamp are appended to hosting.quota_changes in the same transaction. Tenant owners, admins and viewers can read their own ceiling and current open reservations through GET /v1/organizations/{id}/quotas or hosting_cli.py quotas <org UUID>. Machine service tokens cannot read this route or change the ceiling. The API and worker roles cannot modify quota configuration or ledger entries.
+
+A missing quota row means UNBOUNDED at the tenant layer; physical node admission still applies. This preserves current tenants during upgrade, but production must explicitly assign reviewed ceilings for every tenant and monitor absent rows. These ceilings use allocated resources, not observed usage, application counts, storage bytes or a commercial plan. Entitlements, billing, administrative IAM and payment integration remain separate work.

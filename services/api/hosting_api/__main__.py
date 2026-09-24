@@ -186,6 +186,20 @@ class Handler(BaseHTTPRequestHandler):
         return 200, {"from": start.isoformat(), "to": end.isoformat(),
                      "coverage_start": epoch["started_at"].isoformat(), "allocations": rows}
 
+    def quotas(self, conn, org_id, actor):
+        if not allowed(self.membership(conn, org_id, actor), "capacity:read"):
+            return 404, {"error": "not_found"}
+        quota = conn.execute(
+            "SELECT cpu_milli_limit,memory_mb_limit,updated_at FROM hosting.organization_quotas "
+            "WHERE organization_id=%s", (org_id,)).fetchone()
+        reserved = conn.execute(
+            "SELECT coalesce(sum(cpu_milli),0) AS cpu_milli,"
+            "coalesce(sum(memory_mb),0) AS memory_mb "
+            "FROM hosting.capacity_intervals WHERE organization_id=%s AND ended_at IS NULL",
+            (org_id,)).fetchone()
+        return 200, {"quota": quota, "reserved": reserved,
+                     "mode": "OPERATOR_SET" if quota else "UNBOUNDED"}
+
     def membership(self, conn, org_id, actor):
         row = conn.execute(
             "SELECT role FROM hosting.memberships WHERE organization_id=%s AND actor_sub=%s",
@@ -821,6 +835,9 @@ class Handler(BaseHTTPRequestHandler):
                             r"/v1/organizations/([0-9a-f-]{36})/capacity", path)):
                         result = self.capacity(conn, uuid.UUID(match.group(1)), actor,
                                                capacity_window(parsed_url.query))
+                    elif method == "GET" and (match := re.fullmatch(
+                            r"/v1/organizations/([0-9a-f-]{36})/quotas", path)):
+                        result = self.quotas(conn, uuid.UUID(match.group(1)), actor)
                     elif path == "/v1/team/invitations/accept" and method == "POST":
                         result = self.accept_invitation(conn, actor, body, request_id)
                     elif match := re.fullmatch(r"/v1/organizations/([0-9a-f-]{36})/service-accounts(/revoke)?", path):
@@ -892,6 +909,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(400, {"error": "invalid_request"})
         except psycopg.errors.UniqueViolation:
             return self.reply(409, {"error": "conflict"})
+        except psycopg.errors.RaiseException as exc:
+            if exc.diag.message_primary == "quota_exceeded":
+                return self.reply(409, {"error": "quota_exceeded"})
+            return self.reply(503, {"error": "unavailable"})
         except Exception:
             # No SQL, token or configuration detail in a public response.
             return self.reply(503, {"error": "unavailable"})

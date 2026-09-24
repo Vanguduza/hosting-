@@ -33,6 +33,7 @@ from hosting_api.migrate import apply as apply_migrations, verify as verify_migr
 from hosting_api.event_worker import claim as claim_event, finalize as finalize_event
 from replay_event import replay as replay_event
 from event_health import status as event_health_status
+from set_quota import set_quota
 import admit_image
 from unittest.mock import patch
 
@@ -87,14 +88,14 @@ class DatabaseIntegration(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             destination = Path(temporary) / "schema"
             shutil.copytree(ROOT / "services/api/schema", destination)
-            (destination / "020_rollback_probe.sql").write_text(
+            (destination / "021_rollback_probe.sql").write_text(
                 "CREATE TABLE hosting.rollback_probe(id integer);\n"
                 "SELECT 1 / 0;\n", encoding="utf-8")
             with psycopg.connect(self.admin, autocommit=True) as conn:
                 with self.assertRaises(psycopg.errors.DivisionByZero):
                     apply_migrations(conn, destination)
                 self.assertIsNone(conn.execute("SELECT to_regclass('hosting.rollback_probe')").fetchone()[0])
-                self.assertEqual(conn.execute("SELECT count(*) FROM hosting.schema_migrations").fetchone()[0], 19)
+                self.assertEqual(conn.execute("SELECT count(*) FROM hosting.schema_migrations").fetchone()[0], 20)
                 verify_migrations(conn)
 
     def test_committed_audit_delivery_is_ordered_and_fenced(self):
@@ -165,6 +166,74 @@ class DatabaseIntegration(unittest.TestCase):
             replayed = claim_event(conn, org)
             self.assertEqual(replayed["attempts"], 1)
             self.assertTrue(finalize_event(conn, replayed))
+
+    def test_operator_quota_serializes_reservations_and_rejects_lowering(self):
+        org = uuid.uuid4()
+        actor = "quota-" + org.hex
+        with psycopg.connect(self.admin) as conn:
+            conn.execute("INSERT INTO hosting.organizations(id,name) VALUES (%s,'quota-test')", (org,))
+            conn.execute("INSERT INTO hosting.memberships(organization_id,actor_sub,role) "
+                         "VALUES (%s,%s,'owner')", (org, actor))
+        with psycopg.connect(self.admin, row_factory=dict_row) as conn:
+            set_quota(conn, org, 150, 256, "ci-operator", "Reviewed capacity allocation for test")
+        with psycopg.connect(self.api, row_factory=dict_row) as conn:
+            with conn.transaction():
+                conn.execute("SELECT set_config('hosting.actor_sub',%s,true)", (actor,))
+                conn.execute("SELECT set_config('hosting.auth_kind','human',true)")
+                code, result = Handler.__new__(Handler).quotas(conn, org, actor)
+                self.assertEqual(code, 200)
+                self.assertEqual(result["quota"]["cpu_milli_limit"], 150)
+                self.assertEqual(result["reserved"]["cpu_milli"], 0)
+                self.assertEqual(Handler.__new__(Handler).quotas(conn, self.org_b, actor)[0], 404)
+            with self.assertRaises(psycopg.errors.InsufficientPrivilege):
+                conn.execute("UPDATE hosting.organization_quotas SET cpu_milli_limit=100 WHERE organization_id=%s",
+                             (org,))
+        barrier = threading.Barrier(2)
+        outcomes = []
+        errors = []
+        def admit():
+            try:
+                with psycopg.connect(self.admin) as conn:
+                    barrier.wait(timeout=10)
+                    with conn.transaction():
+                        conn.execute("INSERT INTO hosting.capacity_intervals("
+                                     "organization_id,application_id,resource_type,resource_id,node_id,"
+                                     "cpu_milli,memory_mb,started_at,source) VALUES "
+                                     "(%s,%s,'release',%s,%s,100,128,now(),'NEW')",
+                                     (org, uuid.uuid4(), uuid.uuid4(), self.node))
+                    outcomes.append("accepted")
+            except psycopg.errors.RaiseException as exc:
+                if exc.diag.message_primary == "quota_exceeded":
+                    outcomes.append("rejected")
+                else:
+                    errors.append(exc)
+            except Exception as exc:
+                errors.append(exc)
+        threads = [threading.Thread(target=admit) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=20)
+        self.assertFalse(errors)
+        self.assertFalse(any(thread.is_alive() for thread in threads))
+        self.assertCountEqual(outcomes, ["accepted", "rejected"])
+        with psycopg.connect(self.admin, row_factory=dict_row) as conn:
+            self.assertEqual(conn.execute(
+                "SELECT count(*) FROM hosting.capacity_intervals WHERE organization_id=%s",
+                (org,)).fetchone()["count"], 1)
+            with self.assertRaisesRegex(psycopg.errors.RaiseException,
+                                        "Quota below existing reservations"):
+                set_quota(conn, org, 99, 256, "ci-operator", "Attempt to lower below reservation")
+            conn.rollback()
+            self.assertEqual(conn.execute(
+                "SELECT count(*) FROM hosting.quota_changes WHERE organization_id=%s",
+                (org,)).fetchone()["count"], 1)
+        with psycopg.connect(self.api, row_factory=dict_row) as conn:
+            with conn.transaction():
+                conn.execute("SELECT set_config('hosting.actor_sub',%s,true)", (actor,))
+                conn.execute("SELECT set_config('hosting.auth_kind','human',true)")
+                result = Handler.__new__(Handler).quotas(conn, org, actor)[1]
+                self.assertEqual(result["reserved"]["cpu_milli"], 100)
 
     def test_event_final_lease_expiry_becomes_dead(self):
         org = uuid.uuid4()

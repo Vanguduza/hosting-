@@ -88,7 +88,7 @@ def parser():
     commands = result.add_subparsers(dest="command", required=True)
     arguments = {
         "live": (), "ready": (), "openapi": (), "orgs": (),
-        "audit": ("org",), "capacity": ("org", "from_utc", "to_utc"),
+        "audit": ("org",), "capacity": ("org", "from_utc", "to_utc"), "quotas": ("org",),
         "projects": ("org",), "project-create": ("org", "name"),
         "applications": ("org", "project"),
         "application-create": ("org", "project", "name", "environment"),
@@ -133,6 +133,8 @@ def request_for(args):
         if not 0 <= args.after <= 9223372036854775807:
             raise ValueError("Audit cursor out of range")
         return org + "/audit" + ("?after=" + str(args.after) if args.after else ""), None, None
+    if name == "quotas":
+        return org + "/quotas", None, None
     if name == "capacity":
         pattern = r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z"
         if not re.fullmatch(pattern, args.from_utc) or not re.fullmatch(pattern, args.to_utc):
