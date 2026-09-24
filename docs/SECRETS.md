@@ -24,8 +24,32 @@ secret values in command arguments or shell history. The command prints only
 the resource ID and new revision.
 
 This is the credential transport, not a deployed production OpenBao cluster.
-The production cluster requires an encrypted Raft storage and off-host backup
-plan, operator-controlled initialization/unseal, TLS identity, audit device,
-restricted network and tested recovery. Node-local copies must be included
+An Integrated Storage Raft deployment can use `tools/openbao_backup.py` for
+TLS-verified snapshots to an encrypted off-host Restic repository. Configure
+the owner-only files in `deploy/control/openbao-backup.env.example`. The backup
+token needs `read` on `sys/health`, `dial/data/resources/<probe UUID>` and
+`sys/storage/raft/snapshot`; provision the KV v2 canary under that resource
+path and put its canonical JSON SHA256 in the protected probe file, for example
+`{"path":"dial/data/resources/<UUID>","sha256":"<64 lowercase hex>"}`.
+Install the daily snapshot timer with `deploy/control/install-openbao-backup.sh`.
+An operator restores a snapshot to a **separate initialized, unsealed disposable
+Raft authority** with distinct TLS origin and cluster ID. Create a disposable
+identity entity named `dial-disposable-restore` whose metadata has a fresh
+unpredictable `nonce` of at least 32 characters. Run
+`openbao_backup.py restore-to-disposable <full snapshot ID> --target <https origin>
+--target-ca <owner-only CA file> --target-token-file <owner-only disposable root token file>
+--marker <nonce>`. This overwrites the disposable authority using the Raft
+`snapshot-force` endpoint, because its new seal keys differ from the source.
+Unseal the disposable authority with the **original source's** separately held
+unseal material, then run `openbao_backup.py confirm <full snapshot ID>
+--target <https origin> --target-ca <owner-only CA file>`. Confirm reads the
+restored canary at the snapshotted KV revision with the source token and only
+then records `RESTORE_VERIFIED`. Rotate/delete the disposable credentials and
+destroy this test authority after the drill. The Restic password, repository
+access, original unseal material, TLS configuration and plugins need separate
+protected recovery copies; this workflow does not store unseal keys. The
+production cluster still requires operator-controlled initialization/unseal,
+TLS identity, audit device, restricted network, HA and a tested cross-host
+recovery drill. Node-local copies must be included
 in host compromise and credential-rotation procedures. The disposable CI
 OpenBao dev server is isolated to CI and is never a deployment profile.

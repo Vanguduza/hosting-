@@ -1,0 +1,13 @@
+[Unit]
+Description=DIAL encrypted OpenBao Raft snapshot
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/dial-hosting/openbao-backup.env
+ExecStart=/usr/bin/python3 /opt/dial-hosting/openbao_backup.py backup
+TimeoutStartSec=2h
+NoNewPrivileges=yes
+UMask=0077
