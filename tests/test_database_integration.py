@@ -32,6 +32,7 @@ from github_build_worker import claim as claim_build, finalize as finalize_build
 from hosting_api.migrate import apply as apply_migrations, verify as verify_migrations
 from hosting_api.event_worker import claim as claim_event, finalize as finalize_event
 from replay_event import replay as replay_event
+from event_health import status as event_health_status
 import admit_image
 from unittest.mock import patch
 
@@ -86,14 +87,14 @@ class DatabaseIntegration(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             destination = Path(temporary) / "schema"
             shutil.copytree(ROOT / "services/api/schema", destination)
-            (destination / "019_rollback_probe.sql").write_text(
+            (destination / "020_rollback_probe.sql").write_text(
                 "CREATE TABLE hosting.rollback_probe(id integer);\n"
                 "SELECT 1 / 0;\n", encoding="utf-8")
             with psycopg.connect(self.admin, autocommit=True) as conn:
                 with self.assertRaises(psycopg.errors.DivisionByZero):
                     apply_migrations(conn, destination)
                 self.assertIsNone(conn.execute("SELECT to_regclass('hosting.rollback_probe')").fetchone()[0])
-                self.assertEqual(conn.execute("SELECT count(*) FROM hosting.schema_migrations").fetchone()[0], 18)
+                self.assertEqual(conn.execute("SELECT count(*) FROM hosting.schema_migrations").fetchone()[0], 19)
                 verify_migrations(conn)
 
     def test_committed_audit_delivery_is_ordered_and_fenced(self):
@@ -164,6 +165,27 @@ class DatabaseIntegration(unittest.TestCase):
             replayed = claim_event(conn, org)
             self.assertEqual(replayed["attempts"], 1)
             self.assertTrue(finalize_event(conn, replayed))
+
+    def test_event_final_lease_expiry_becomes_dead(self):
+        org = uuid.uuid4()
+        with psycopg.connect(self.admin, row_factory=dict_row) as conn:
+            conn.execute("INSERT INTO hosting.organizations(id,name) VALUES (%s,'lease-test')", (org,))
+            record(conn, org, "ci", "test.lease", uuid.uuid4(), uuid.uuid4())
+            event_id = conn.execute("SELECT id FROM hosting.audit_events WHERE organization_id=%s",
+                                    (org,)).fetchone()["id"]
+            conn.execute("UPDATE hosting.event_outbox SET attempts=10,lease_token=%s,"
+                         "lease_until=now()-interval '1 second' WHERE audit_event_id=%s",
+                         (uuid.uuid4(), event_id))
+        with psycopg.connect(self.worker, autocommit=True, row_factory=dict_row) as conn:
+            self.assertIsNone(claim_event(conn, org))
+            self.assertGreaterEqual(event_health_status(conn, 300, 1000)["dead"], 1)
+            self.assertFalse(event_health_status(conn, 300, 1000)["healthy"])
+        with psycopg.connect(self.admin, row_factory=dict_row) as conn:
+            row = conn.execute("SELECT state,lease_token,last_error FROM hosting.event_outbox "
+                               "WHERE audit_event_id=%s", (event_id,)).fetchone()
+            self.assertEqual(row["state"], "DEAD")
+            self.assertIsNone(row["lease_token"])
+            self.assertIn("expired", row["last_error"])
 
     def test_capacity_reservation_intervals_are_tenant_scoped_and_close_once(self):
         org, project, app, release, database = (uuid.uuid4() for _ in range(5))

@@ -32,6 +32,15 @@ def endpoint(value):
 def claim(conn, organization_id=None):
     """Lease the earliest available event in one tenant, with no earlier gap."""
     with conn.transaction():
+        # A process may die after taking its tenth lease. Mark those rows dead
+        # before claiming; incrementing once more would violate the bound.
+        conn.execute(
+            "UPDATE hosting.event_outbox SET state='DEAD',lease_token=NULL,lease_until=NULL,"
+            "last_error='Delivery lease expired after final attempt' "
+            "WHERE audit_event_id IN (SELECT audit_event_id FROM hosting.event_outbox "
+            "WHERE state='PENDING' AND attempts=10 AND lease_until<now() "
+            "ORDER BY lease_until FOR UPDATE SKIP LOCKED LIMIT 100)"
+        )
         row = conn.execute(
             "SELECT o.audit_event_id,o.organization_id,o.attempts,a.actor_sub,a.action,"
             "a.resource_id,a.request_id,a.previous_hash,a.event_hash,a.created_at "
