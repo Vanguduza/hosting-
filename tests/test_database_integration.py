@@ -30,6 +30,8 @@ from hosting_api.github_webhook import enqueue, parse_push, verify
 from http.server import ThreadingHTTPServer
 from github_build_worker import claim as claim_build, finalize as finalize_build
 from hosting_api.migrate import apply as apply_migrations, verify as verify_migrations
+from hosting_api.event_worker import claim as claim_event, finalize as finalize_event
+from replay_event import replay as replay_event
 import admit_image
 from unittest.mock import patch
 
@@ -84,15 +86,84 @@ class DatabaseIntegration(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             destination = Path(temporary) / "schema"
             shutil.copytree(ROOT / "services/api/schema", destination)
-            (destination / "018_rollback_probe.sql").write_text(
+            (destination / "019_rollback_probe.sql").write_text(
                 "CREATE TABLE hosting.rollback_probe(id integer);\n"
                 "SELECT 1 / 0;\n", encoding="utf-8")
             with psycopg.connect(self.admin, autocommit=True) as conn:
                 with self.assertRaises(psycopg.errors.DivisionByZero):
                     apply_migrations(conn, destination)
                 self.assertIsNone(conn.execute("SELECT to_regclass('hosting.rollback_probe')").fetchone()[0])
-                self.assertEqual(conn.execute("SELECT count(*) FROM hosting.schema_migrations").fetchone()[0], 17)
+                self.assertEqual(conn.execute("SELECT count(*) FROM hosting.schema_migrations").fetchone()[0], 18)
                 verify_migrations(conn)
+
+    def test_committed_audit_delivery_is_ordered_and_fenced(self):
+        org = uuid.uuid4()
+        actor = "event-" + org.hex
+        with psycopg.connect(self.admin) as conn:
+            conn.execute("INSERT INTO hosting.organizations(id,name) VALUES (%s,'event-test')", (org,))
+            conn.execute("INSERT INTO hosting.memberships(organization_id,actor_sub,role) "
+                         "VALUES (%s,%s,'owner')", (org, actor))
+        with psycopg.connect(self.api, row_factory=dict_row) as conn:
+            try:
+                with conn.transaction():
+                    conn.execute("SELECT set_config('hosting.actor_sub',%s,true)", (actor,))
+                    conn.execute("SELECT set_config('hosting.auth_kind','human',true)")
+                    record(conn, org, actor, "test.rolled_back", uuid.uuid4(), uuid.uuid4())
+                    raise ValueError("rollback")
+            except ValueError:
+                pass
+            with self.assertRaises(psycopg.errors.InsufficientPrivilege):
+                conn.execute("SELECT * FROM hosting.event_outbox LIMIT 1")
+            conn.rollback()
+            with conn.transaction():
+                conn.execute("SELECT set_config('hosting.actor_sub',%s,true)", (actor,))
+                conn.execute("SELECT set_config('hosting.auth_kind','human',true)")
+                record(conn, org, actor, "test.first", uuid.uuid4(), uuid.uuid4())
+                record(conn, org, actor, "test.second", uuid.uuid4(), uuid.uuid4())
+        with psycopg.connect(self.admin, row_factory=dict_row) as conn:
+            self.assertEqual([r["action"] for r in conn.execute(
+                "SELECT a.action FROM hosting.audit_events a WHERE a.organization_id=%s ORDER BY a.id", (org,))],
+                ["test.first", "test.second"])
+            self.assertEqual(conn.execute("SELECT count(*) FROM hosting.event_outbox WHERE organization_id=%s",
+                                          (org,)).fetchone()["count"], 2)
+        with psycopg.connect(self.worker, autocommit=True, row_factory=dict_row) as conn:
+            first = claim_event(conn, org)
+            self.assertEqual(first["action"], "test.first")
+            self.assertIsNone(claim_event(conn, org))
+            self.assertTrue(finalize_event(conn, first, "temporary failure"))
+            self.assertIsNone(claim_event(conn, org))
+            with self.assertRaises(psycopg.errors.InsufficientPrivilege):
+                conn.execute("DELETE FROM hosting.event_outbox WHERE organization_id=%s", (org,))
+        with psycopg.connect(self.admin) as conn:
+            conn.execute("UPDATE hosting.event_outbox SET next_attempt_at=now()-interval '1 second' "
+                         "WHERE audit_event_id=%s", (first["audit_event_id"],))
+        with psycopg.connect(self.worker, autocommit=True, row_factory=dict_row) as conn:
+            retried = claim_event(conn, org)
+            self.assertEqual(retried["attempts"], 2)
+            self.assertFalse(finalize_event(conn, first))
+            self.assertTrue(finalize_event(conn, retried))
+            second = claim_event(conn, org)
+            self.assertEqual(second["action"], "test.second")
+            self.assertTrue(finalize_event(conn, second, "sink down"))
+            for expected_attempt in range(2, 11):
+                with psycopg.connect(self.admin) as admin:
+                    admin.execute("UPDATE hosting.event_outbox SET next_attempt_at=now()-interval '1 second' "
+                                  "WHERE audit_event_id=%s", (second["audit_event_id"],))
+                second = claim_event(conn, org)
+                self.assertEqual(second["attempts"], expected_attempt)
+                self.assertTrue(finalize_event(conn, second, "sink down"))
+            self.assertIsNone(claim_event(conn, org))
+        with psycopg.connect(self.admin, row_factory=dict_row) as conn:
+            self.assertEqual(conn.execute("SELECT state FROM hosting.event_outbox WHERE audit_event_id=%s",
+                                          (second["audit_event_id"],)).fetchone()["state"], "DEAD")
+            self.assertEqual(replay_event(conn, second["audit_event_id"], "ci-operator",
+                                          "Receiver recovered; replay rejected delivery"), org)
+            self.assertEqual(conn.execute("SELECT count(*) FROM hosting.event_replays WHERE audit_event_id=%s",
+                                          (second["audit_event_id"],)).fetchone()["count"], 1)
+        with psycopg.connect(self.worker, autocommit=True, row_factory=dict_row) as conn:
+            replayed = claim_event(conn, org)
+            self.assertEqual(replayed["attempts"], 1)
+            self.assertTrue(finalize_event(conn, replayed))
 
     def test_capacity_reservation_intervals_are_tenant_scoped_and_close_once(self):
         org, project, app, release, database = (uuid.uuid4() for _ in range(5))
