@@ -40,7 +40,7 @@ Every stateful service has a distinct backup and recovery receipt. Placement is 
 Repository code, static tests, and disposable GitHub Actions jobs provide partial
 evidence for tenant scope, authentication boundaries, schema consistency,
 PostgreSQL and Valkey resource lifecycles, development-only private Garage S3,
-encrypted control/client logical backups and quiesced Valkey/Garage volume
+encrypted control/client logical backups, physical PostgreSQL base backups and quiesced Valkey/Garage volume
 backups with isolated semantic restore probes and hourly freshness checks,
 an OpenBao Raft snapshot workflow with a disposable authority recovery probe
 and off-host repository freshness check,
