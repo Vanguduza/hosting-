@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Encrypted off-host control DB backup and isolated semantic restore drill."""
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -19,21 +20,24 @@ def run(args, *, timeout=3600):
     return result.stdout
 
 
-def environment():
+def environment(offhost=True):
     required = ("RESTIC_REPOSITORY", "RESTIC_PASSWORD_FILE", "PGHOST", "PGUSER", "PGDATABASE", "PGPASSFILE", "BACKUP_EVIDENCE_DIR")
     missing = [name for name in required if not os.environ.get(name)]
     if missing:
         raise RuntimeError("Missing backup configuration: " + ", ".join(missing))
     repository = os.environ["RESTIC_REPOSITORY"]
-    if not repository.startswith(("s3:", "b2:", "rest:https://", "rclone:")):
+    if offhost and not repository.startswith(("s3:", "b2:", "rest:https://", "rclone:")):
         raise RuntimeError("Repository must be an off-host encrypted restic target")
     for name in ("RESTIC_PASSWORD_FILE", "PGPASSFILE"):
         path = Path(os.environ[name])
-        if not path.is_file() or path.stat().st_mode & 0o077:
+        if path.is_symlink() or not path.is_file() or path.stat().st_uid != os.geteuid() or \
+                path.stat().st_mode & 0o077:
             raise RuntimeError(name + " must be an owner-only file")
-    evidence = Path(os.environ["BACKUP_EVIDENCE_DIR"]).resolve()
+    evidence = Path(os.environ["BACKUP_EVIDENCE_DIR"])
+    if evidence.is_symlink():
+        raise RuntimeError("Backup evidence directory cannot be a symlink")
     evidence.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if evidence.stat().st_mode & 0o077:
+    if evidence.stat().st_uid != os.geteuid() or evidence.stat().st_mode & 0o077:
         raise RuntimeError("Evidence directory must be owner-only")
     return evidence
 
@@ -63,6 +67,9 @@ def file_digest(path):
 
 
 def backup(evidence):
+    if run(["psql", "--no-psqlrc", "-Atc",
+            "SELECT rolbypassrls OR rolsuper FROM pg_roles WHERE rolname=current_user"]).strip() != "t":
+        raise RuntimeError("Backup role cannot see every tenant")
     with tempfile.TemporaryDirectory(prefix="dial-control-backup-") as temp:
         os.chmod(temp, 0o700)
         archive = Path(temp) / "control.dump"
@@ -73,13 +80,16 @@ def backup(evidence):
                    "database": os.environ["PGDATABASE"], "created_at": datetime.now(timezone.utc).isoformat(),
                    "state": "BACKUP_CREATED", "restore_verified_at": None}
         save_receipt(evidence, receipt)
-        print(json.dumps(receipt, sort_keys=True))
+        return receipt
 
 
 def verify(evidence, snapshot):
     if not re.fullmatch(r"[a-f0-9]{64}", snapshot):
         raise RuntimeError("Snapshot must be a full restic ID")
     path = evidence / (snapshot + ".json")
+    if path.is_symlink() or not path.is_file() or path.stat().st_uid != os.geteuid() or \
+            path.stat().st_mode & 0o077:
+        raise RuntimeError("Protected control backup evidence unavailable")
     receipt = json.loads(path.read_text())
     if receipt["snapshot_id"] != snapshot:
         raise RuntimeError("Evidence/snapshot mismatch")
@@ -121,21 +131,31 @@ def verify(evidence, snapshot):
         file.flush()
         os.fsync(file.fileno())
     os.replace(temporary, path)
-    print(json.dumps(receipt, sort_keys=True))
+    return receipt
 
 
 def main():
     parser = argparse.ArgumentParser()
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("backup")
+    commands.add_parser("backup-and-verify")
     drill = commands.add_parser("verify")
     drill.add_argument("snapshot_id")
     args = parser.parse_args()
     evidence = environment()
-    if args.command == "backup":
-        backup(evidence)
-    else:
-        verify(evidence, args.snapshot_id)
+    fd = os.open(evidence / ".control-backup.lock", os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if args.command == "backup":
+            receipt = backup(evidence)
+        elif args.command == "backup-and-verify":
+            created = backup(evidence)
+            receipt = verify(evidence, created["snapshot_id"])
+        else:
+            receipt = verify(evidence, args.snapshot_id)
+        print(json.dumps(receipt, sort_keys=True))
+    finally:
+        os.close(fd)
 
 
 if __name__ == "__main__":
