@@ -38,7 +38,9 @@ class StorageRuntime(unittest.TestCase):
             for instance, values in ((first, secret), (second, other_secret)):
                 node.deliver_secrets({"resource_id": instance, "version": 1, "values": values})
             previous = os.environ.get("NODE_GARAGE_IMAGE")
+            previous_shell = os.environ.get("NODE_STORAGE_SHELL_IMAGE")
             os.environ["NODE_GARAGE_IMAGE"] = os.environ["STORAGE_RUNTIME_IMAGE"]
+            os.environ["NODE_STORAGE_SHELL_IMAGE"] = os.environ["STORAGE_SHELL_IMAGE"]
             containers = [names(first)[0], names(second)[0], node.container(release), node.container(foreign_release)]
             volumes = [names(first)[2], names(second)[2]]
             networks = [names(first)[1], names(second)[1], node.application_network(app),
@@ -102,3 +104,7 @@ class StorageRuntime(unittest.TestCase):
                     os.environ.pop("NODE_GARAGE_IMAGE", None)
                 else:
                     os.environ["NODE_GARAGE_IMAGE"] = previous
+                if previous_shell is None:
+                    os.environ.pop("NODE_STORAGE_SHELL_IMAGE", None)
+                else:
+                    os.environ["NODE_STORAGE_SHELL_IMAGE"] = previous_shell

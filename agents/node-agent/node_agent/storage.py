@@ -1,5 +1,6 @@
 """Private, persistent single-node Garage bucket bound to one application."""
 import http.client
+import hashlib
 import json
 import os
 import re
@@ -90,6 +91,33 @@ def _private_probe(ip, bucket):
         connection.close()
 
 
+def launcher_image(node, image):
+    """Add only a static shell to Garage's scratch image; retain both source digests."""
+    helper = os.environ.get("NODE_STORAGE_SHELL_IMAGE", "")
+    if not IMAGE.fullmatch(helper) or not helper.rsplit("/", 1)[-1].startswith("busybox:1.37.0-musl@"):
+        raise OperationError("BusyBox musl 1.37.0 helper must be configured by immutable digest")
+    directory = node.secrets_dir / "s3-launcher"
+    directory.mkdir(mode=0o700, exist_ok=True)
+    if directory.is_symlink() or directory.stat().st_mode & 0o077:
+        raise OperationError("Storage launcher directory unsafe")
+    dockerfile = directory / "Dockerfile"
+    source = "FROM " + helper + " AS helper\nFROM " + image + "\nCOPY --from=helper /bin/busybox /bin/sh\n"
+    if dockerfile.exists():
+        if dockerfile.is_symlink() or dockerfile.read_text() != source:
+            raise OperationError("Storage launcher image source differs")
+    else:
+        fd = os.open(dockerfile, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "w") as file:
+            file.write(source)
+            file.flush()
+            os.fsync(file.fileno())
+    tag = "dial-s3-launcher:" + hashlib.sha256(source.encode()).hexdigest()
+    node.runner(["docker", "pull", image], 300)
+    node.runner(["docker", "pull", helper], 300)
+    node.runner(["docker", "build", "--pull=false", "-t", tag, "-f", str(dockerfile), str(directory)], 300)
+    return tag
+
+
 def provision(node, data):
     if set(data) != {"instance_id", "application_id", "memory_mb", "cpu_milli", "secret_version"}:
         raise ValueError("Invalid storage operation")
@@ -107,11 +135,12 @@ def provision(node, data):
     with node.lock, node.file_lock():
         files, values = credential_files(node, instance, version)
         config = _config(node, instance, values)
+        launcher = launcher_image(node, image)
         current = inspect(node, container)
         if current:
             labels = current.get("Config", {}).get("Labels", {})
             if labels.get("dial.storage") != instance or labels.get("dial.application") != app or \
-                    current.get("Config", {}).get("Image") != image or \
+                    current.get("Config", {}).get("Image") != launcher or \
                     network not in current.get("NetworkSettings", {}).get("Networks", {}) or \
                     current.get("HostConfig", {}).get("PortBindings") or \
                     not any(m.get("Name") == volume and m.get("Destination") == "/var/lib/garage"
@@ -138,7 +167,6 @@ def provision(node, data):
             if network_info and (network_info.get("Labels", {}).get("dial.storage") != instance or
                                  network_info.get("Internal") is not True):
                 raise OperationError("Storage network ownership mismatch")
-            node.runner(["docker", "pull", image], 300)
             if not network_info:
                 node.runner(["docker", "network", "create", "--internal", "--label", "dial.storage=" + instance,
                              network], 30)
@@ -146,8 +174,11 @@ def provision(node, data):
                 node.runner(["docker", "volume", "create", "--label", "dial.storage=" + instance, volume], 30)
             # Keys enter through read-only files inside the container. Neither
             # the Docker command nor inspectable Config.Env contains their values.
-            launch = ('export GARAGE_DEFAULT_ACCESS_KEY="$(cat /run/secrets/access_key)"; '
-                      'export GARAGE_DEFAULT_SECRET_KEY="$(cat /run/secrets/secret_key)"; '
+            launch = ('IFS= read -r GARAGE_DEFAULT_ACCESS_KEY < /run/secrets/access_key || '
+                      '[ -n "$GARAGE_DEFAULT_ACCESS_KEY" ]; '
+                      'IFS= read -r GARAGE_DEFAULT_SECRET_KEY < /run/secrets/secret_key || '
+                      '[ -n "$GARAGE_DEFAULT_SECRET_KEY" ]; '
+                      'export GARAGE_DEFAULT_ACCESS_KEY GARAGE_DEFAULT_SECRET_KEY; '
                       'exec /garage server --single-node --default-bucket')
             node.runner(["docker", "run", "-d", "--name", container,
                          "--label", "dial.storage=" + instance, "--label", "dial.application=" + app,
@@ -162,7 +193,7 @@ def provision(node, data):
                          "--mount", "type=bind,src=" + str(files["secret_key"]) +
                                     ",dst=/run/secrets/secret_key,readonly",
                          "-e", "GARAGE_DEFAULT_BUCKET=" + bucket,
-                         "--entrypoint", "/bin/sh", image, "-ec", launch], 120)
+                         "--entrypoint", "/bin/sh", launcher, "-ec", launch], 120)
         deadline = time.monotonic() + 90
         while time.monotonic() < deadline:
             current = inspect(node, container)
