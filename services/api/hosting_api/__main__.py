@@ -247,7 +247,7 @@ class Handler(BaseHTTPRequestHandler):
             return 404, {"error": "not_found"}
         if method == "GET":
             rows = conn.execute(
-                "SELECT id,name,environment,active_release_id,created_at FROM hosting.applications "
+                "SELECT id,name,environment,active_release_id,traffic_state,created_at FROM hosting.applications "
                 "WHERE organization_id=%s AND project_id=%s ORDER BY created_at DESC LIMIT 100",
                 (org_id, project_id),
             ).fetchall()
@@ -259,6 +259,42 @@ class Handler(BaseHTTPRequestHandler):
                      (app_id, org_id, project_id, body["name"], body["environment"]))
         record(conn, org_id, actor, "application.create", app_id, request_id)
         return 201, {"id": app_id, "request_id": request_id}
+
+    def traffic(self, conn, org_id, app_id, actor, body, method, request_id):
+        role = self.membership(conn, org_id, actor)
+        if not allowed(role, "application:read" if method == "GET" else "application:traffic"):
+            return 404, {"error": "not_found"}
+        conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,1))", (str(app_id),))
+        app = conn.execute("SELECT traffic_state,traffic_reason,traffic_requested_by,traffic_updated_at,"
+                           "traffic_last_error FROM hosting.applications WHERE organization_id=%s AND id=%s",
+                           (org_id, app_id)).fetchone()
+        if not app:
+            return 404, {"error": "not_found"}
+        if method == "GET":
+            return 200, {"traffic": app}
+        action, reason = body.get("action"), body.get("reason")
+        if (set(body) != {"action", "reason", "confirm"} or action not in ("suspend", "resume") or
+                body["confirm"] != action + "_application" or not isinstance(reason, str) or
+                not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 .,:;_()/-]{2,239}", reason)):
+            return 400, {"error": "invalid_traffic_request"}
+        state = app["traffic_state"]
+        target = "SUSPENDING" if action == "suspend" else "RESUMING"
+        if state == target or state == ("SUSPENDED" if action == "suspend" else "ACTIVE"):
+            return 200, {"state": state, "replayed": True}
+        if state != ("ACTIVE" if action == "suspend" else "SUSPENDED"):
+            return 409, {"error": "traffic_transition_in_progress"}
+        if action == "suspend" and conn.execute(
+                "SELECT 1 FROM hosting.releases WHERE application_id=%s AND state IN ('QUEUED','DEPLOYING')",
+                (app_id,)).fetchone():
+            return 409, {"error": "release_in_progress"}
+        conn.execute("UPDATE hosting.applications SET traffic_state=%s,traffic_reason=%s,traffic_requested_by=%s,"
+                     "traffic_updated_at=now(),traffic_next_attempt_at=now(),traffic_last_error=NULL WHERE id=%s",
+                     (target, reason, actor, app_id))
+        conn.execute("INSERT INTO hosting.application_traffic_events "
+                     "(organization_id,application_id,actor_sub,action,reason,request_id) "
+                     "VALUES (%s,%s,%s,%s,%s,%s)", (org_id, app_id, actor, action, reason, request_id))
+        record(conn, org_id, actor, "application.traffic_" + action, app_id, request_id)
+        return 202, {"state": target, "request_id": request_id}
 
     def builds(self, conn, org_id, app_id, actor, method):
         if method != "GET" or not allowed(self.membership(conn, org_id, actor), "release:read"):
@@ -298,7 +334,9 @@ class Handler(BaseHTTPRequestHandler):
         if not domain:
             return 409, {"error": "verified_domain_required"}
         conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 1))", (str(app_id),))
-        app = conn.execute("SELECT active_release_id FROM hosting.applications WHERE id=%s", (app_id,)).fetchone()
+        app = conn.execute("SELECT active_release_id,traffic_state FROM hosting.applications WHERE id=%s", (app_id,)).fetchone()
+        if app["traffic_state"] != "ACTIVE":
+            return 409, {"error": "application_traffic_not_active"}
         existing = conn.execute(
             "SELECT id,state,image,port,health_path,memory_mb,cpu_milli,rollback_of_release_id FROM hosting.releases "
             "WHERE organization_id=%s AND application_id=%s AND idempotency_key=%s",
@@ -574,6 +612,9 @@ class Handler(BaseHTTPRequestHandler):
                     elif match := re.fullmatch(r"/v1/organizations/([0-9a-f-]{36})/projects/([0-9a-f-]{36})/applications", path):
                         result = self.applications(conn, uuid.UUID(match.group(1)), uuid.UUID(match.group(2)),
                                                    actor, body, method, request_id)
+                    elif match := re.fullmatch(r"/v1/organizations/([0-9a-f-]{36})/applications/([0-9a-f-]{36})/traffic", path):
+                        result = self.traffic(conn, uuid.UUID(match.group(1)), uuid.UUID(match.group(2)),
+                                              actor, body, method, request_id)
                     elif match := re.fullmatch(r"/v1/organizations/([0-9a-f-]{36})/applications/([0-9a-f-]{36})/domain(/verify)?", path):
                         result = self.domains(conn, uuid.UUID(match.group(1)), uuid.UUID(match.group(2)),
                                               actor, body, method, request_id, verify=bool(match.group(3)))

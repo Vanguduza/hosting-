@@ -101,6 +101,8 @@ class CliTests(unittest.TestCase):
             "live": [], "ready": [], "openapi": [], "orgs": [],
             "projects": [one], "project-create": [one, "alpha"],
             "applications": [one, two], "application-create": [one, two, "api", "production"],
+            "traffic": [one, three], "suspend": [one, three, "Owner requested pause"],
+            "resume": [one, three, "Owner requested resume"],
             "domain": [one, three], "domain-register": [one, three, "app.example.org"],
             "domain-verify": [one, three], "builds": [one, three],
             "releases": [one, three], "release-queue": [one, three,

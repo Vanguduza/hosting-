@@ -203,6 +203,76 @@ def node_abort(node, release, certificate):
         connection.close()
 
 
+def claim_traffic(conn):
+    """Lease a reversible public-route transition; a crash leaves it retryable."""
+    with conn.transaction():
+        row = conn.execute(
+            "SELECT a.id AS application_id,a.organization_id,a.active_release_id,a.traffic_state,"
+            "a.traffic_requested_by,r.port,r.health_path,d.hostname,d.verified_at,d.verification_token,"
+            "n.endpoint,n.server_name,n.public_ipv4 FROM hosting.applications a "
+            "LEFT JOIN hosting.releases r ON r.id=a.active_release_id "
+            "LEFT JOIN hosting.nodes n ON n.id=r.node_id "
+            "LEFT JOIN hosting.domains d ON d.application_id=a.id "
+            "WHERE a.traffic_state IN ('SUSPENDING','RESUMING') "
+            "AND a.traffic_next_attempt_at <= now() "
+            "AND (a.traffic_lease_until IS NULL OR a.traffic_lease_until < now()) "
+            "ORDER BY a.traffic_next_attempt_at,a.id FOR UPDATE OF a SKIP LOCKED LIMIT 1"
+        ).fetchone()
+        if not row:
+            return None
+        token = uuid.uuid4()
+        conn.execute("UPDATE hosting.applications SET traffic_lease_token=%s,"
+                     "traffic_lease_until=now()+interval '3 minutes' WHERE id=%s",
+                     (token, row["application_id"]))
+        return row, token
+
+
+def finalize_traffic(conn, row, token, error=None):
+    with conn.transaction():
+        conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,1))", (str(row["application_id"]),))
+        state = row["traffic_state"]
+        if error:
+            changed = conn.execute(
+                "UPDATE hosting.applications SET traffic_lease_token=NULL,traffic_lease_until=NULL,"
+                "traffic_last_error=%s,traffic_next_attempt_at=now()+interval '15 seconds' "
+                "WHERE id=%s AND traffic_state=%s AND traffic_lease_token=%s RETURNING id",
+                (str(error)[:120], row["application_id"], state, token)).fetchone()
+            return bool(changed)
+        target = "SUSPENDED" if state == "SUSPENDING" else "ACTIVE"
+        changed = conn.execute(
+            "UPDATE hosting.applications SET traffic_state=%s,traffic_lease_token=NULL,traffic_lease_until=NULL,"
+            "traffic_last_error=NULL,traffic_updated_at=now() "
+            "WHERE id=%s AND traffic_state=%s AND traffic_lease_token=%s RETURNING id",
+            (target, row["application_id"], state, token)).fetchone()
+        if changed:
+            conn.execute("SELECT set_config('hosting.actor_sub',%s,true)", (row["traffic_requested_by"],))
+            record(conn, row["organization_id"], row["traffic_requested_by"],
+                   "application." + target.lower(), row["application_id"], uuid.uuid4())
+        return bool(changed)
+
+
+def process_traffic_once(conn, certificate):
+    claimed = claim_traffic(conn)
+    if not claimed:
+        return False
+    row, token = claimed
+    try:
+        if row["active_release_id"]:
+            if not row["endpoint"]:
+                raise RuntimeError("Suspended application's node is unavailable")
+            release = {"id": row["active_release_id"], "application_id": row["application_id"],
+                       "port": row["port"], "health_path": row["health_path"], "previous_release_id": None}
+            if row["traffic_state"] == "SUSPENDING":
+                route_request(row, {"application_id": str(row["application_id"]),
+                                    "release_id": str(row["active_release_id"])}, certificate, remove=True)
+            else:
+                publish(row, release, row, certificate)
+        finalize_traffic(conn, row, token)
+    except Exception as exc:
+        finalize_traffic(conn, row, token, error=type(exc).__name__)
+    return True
+
+
 def sweep_failed(conn, certificate):
     failed = conn.execute("SELECT r.id,r.application_id,r.previous_release_id,r.node_id,r.cpu_milli,r.memory_mb,"
                           "r.port,r.health_path,p.port AS previous_port,p.health_path AS previous_health_path,"
@@ -213,10 +283,17 @@ def sweep_failed(conn, certificate):
                           "WHERE r.state='FAILED' AND r.cleanup_at IS NULL ORDER BY r.created_at LIMIT 20").fetchall()
     for row in failed:
         try:
-            if row["hostname"]:
-                restore_route(row, row, row, certificate)
-            node_abort(row, row, certificate)
             with conn.transaction():
+                # The same application lock guards API suspension and release admission.
+                # A delayed failed-release cleanup must never recreate a suspended route.
+                conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,1))", (str(row["application_id"]),))
+                state = conn.execute("SELECT traffic_state FROM hosting.applications WHERE id=%s",
+                                     (row["application_id"],)).fetchone()
+                if not state or state["traffic_state"] != "ACTIVE":
+                    continue
+                if row["hostname"]:
+                    restore_route(row, row, row, certificate)
+                node_abort(row, row, certificate)
                 changed = conn.execute("UPDATE hosting.releases SET cleanup_at=now() "
                                        "WHERE id=%s AND state='FAILED' AND cleanup_at IS NULL RETURNING id",
                                        (row["id"],)).fetchone()
@@ -341,6 +418,8 @@ def process_once(conn, certificate):
     if process_postgres(conn, certificate):
         return True
     if process_valkey(conn, certificate):
+        return True
+    if process_traffic_once(conn, certificate):
         return True
     sweep_failed(conn, certificate)
     sweep_retirements(conn, certificate)

@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "services/api"))
 sys.path.insert(0, str(ROOT / "tools"))
 from hosting_api.__main__ import Handler
-from hosting_api.worker import claim, finalize, sweep_retirements, sweep_failed
+from hosting_api.worker import claim, finalize, sweep_retirements, sweep_failed, process_traffic_once
 from hosting_api.postgres_jobs import claim as claim_postgres, finalize as finalize_postgres
 from hosting_api.valkey_jobs import claim as claim_valkey, finalize as finalize_valkey
 from hosting_api.github_webhook import Handler as HookHandler
@@ -81,15 +81,108 @@ class DatabaseIntegration(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             destination = Path(temporary) / "schema"
             shutil.copytree(ROOT / "services/api/schema", destination)
-            (destination / "013_rollback_probe.sql").write_text(
+            (destination / "014_rollback_probe.sql").write_text(
                 "CREATE TABLE hosting.rollback_probe(id integer);\n"
                 "SELECT 1 / 0;\n", encoding="utf-8")
             with psycopg.connect(self.admin, autocommit=True) as conn:
                 with self.assertRaises(psycopg.errors.DivisionByZero):
                     apply_migrations(conn, destination)
                 self.assertIsNone(conn.execute("SELECT to_regclass('hosting.rollback_probe')").fetchone()[0])
-                self.assertEqual(conn.execute("SELECT count(*) FROM hosting.schema_migrations").fetchone()[0], 12)
+                self.assertEqual(conn.execute("SELECT count(*) FROM hosting.schema_migrations").fetchone()[0], 13)
                 verify_migrations(conn)
+
+    def test_application_suspension_and_verified_resume(self):
+        org, project, app, release = (uuid.uuid4() for _ in range(4))
+        owner, viewer = "traffic-owner-" + str(app), "traffic-viewer-" + str(app)
+        with psycopg.connect(self.admin) as conn:
+            conn.execute("INSERT INTO hosting.organizations(id,name) VALUES (%s,'traffic-test')", (org,))
+            conn.execute("INSERT INTO hosting.memberships(organization_id,actor_sub,role) "
+                         "VALUES (%s,%s,'owner'),(%s,%s,'viewer')", (org, owner, org, viewer))
+            conn.execute("INSERT INTO hosting.projects(id,organization_id,name) VALUES (%s,%s,'traffic')", (project, org))
+            conn.execute("INSERT INTO hosting.applications(id,organization_id,project_id,environment,name,active_release_id) "
+                         "VALUES (%s,%s,%s,'production','traffic',%s)", (app, org, project, release))
+            conn.execute("INSERT INTO hosting.releases(id,organization_id,application_id,node_id,requested_by,"
+                         "idempotency_key,image,port,health_path,memory_mb,cpu_milli,state) "
+                         "VALUES (%s,%s,%s,%s,%s,%s,%s,8080,'/health',128,100,'SERVING')",
+                         (release, org, app, self.node, owner, uuid.uuid4(), self.image))
+            conn.execute("INSERT INTO hosting.domains(organization_id,application_id,hostname,"
+                         "verification_token,verified_at) VALUES (%s,%s,%s,%s,now())",
+                         (org, app, "traffic-" + app.hex[:12] + ".example.org", "A" * 43))
+        handler = Handler.__new__(Handler)
+        suspend = {"action": "suspend", "reason": "Owner abuse investigation 123",
+                   "confirm": "suspend_application"}
+        with psycopg.connect(self.api, row_factory=dict_row) as conn:
+            with conn.transaction():
+                conn.execute("SELECT set_config('hosting.actor_sub',%s,true)", (viewer,))
+                self.assertEqual(handler.traffic(conn, org, app, viewer, {}, "GET", uuid.uuid4())[0], 200)
+                self.assertEqual(handler.traffic(conn, org, app, viewer, suspend, "POST", uuid.uuid4())[0], 404)
+            with conn.transaction():
+                conn.execute("SELECT set_config('hosting.actor_sub','alice',true)")
+                self.assertEqual(handler.traffic(conn, org, app, "alice", {}, "GET", uuid.uuid4())[0], 404)
+            with conn.transaction():
+                conn.execute("SELECT set_config('hosting.actor_sub',%s,true)", (owner,))
+                self.assertEqual(handler.traffic(conn, org, app, owner, suspend, "POST", uuid.uuid4())[0], 202)
+                self.assertEqual(handler.traffic(conn, org, app, owner, suspend, "POST", uuid.uuid4())[1],
+                                 {"state": "SUSPENDING", "replayed": True})
+                release_body = {"idempotency_key": str(uuid.uuid4()), "image": self.image, "port": 8080,
+                                "health_path": "/health", "memory_mb": 128, "cpu_milli": 100}
+                self.assertEqual(handler.releases(conn, org, app, owner, release_body, "POST", uuid.uuid4())[1],
+                                 {"error": "application_traffic_not_active"})
+        with psycopg.connect(self.worker, row_factory=dict_row, autocommit=True) as conn:
+            with patch("hosting_api.worker.route_request", side_effect=RuntimeError("node unavailable")) as remove:
+                self.assertTrue(process_traffic_once(conn, {}))
+                remove.assert_called_once()
+            with psycopg.connect(self.admin, row_factory=dict_row) as admin:
+                state = admin.execute("SELECT traffic_state,traffic_last_error FROM hosting.applications WHERE id=%s",
+                                      (app,)).fetchone()
+                self.assertEqual((state["traffic_state"], state["traffic_last_error"]),
+                                 ("SUSPENDING", "RuntimeError"))
+                admin.execute("UPDATE hosting.applications SET traffic_next_attempt_at=now() WHERE id=%s", (app,))
+            with patch("hosting_api.worker.route_request", return_value={"state": "UNROUTED"}) as remove:
+                self.assertTrue(process_traffic_once(conn, {}))
+                self.assertTrue(remove.call_args.kwargs["remove"])
+            self.assertFalse(process_traffic_once(conn, {}))
+        with psycopg.connect(self.admin, row_factory=dict_row) as conn:
+            state = conn.execute("SELECT active_release_id,traffic_state FROM hosting.applications WHERE id=%s",
+                                 (app,)).fetchone()
+            self.assertEqual((state["active_release_id"], state["traffic_state"]), (release, "SUSPENDED"))
+            self.assertEqual(conn.execute("SELECT count(*) FROM hosting.application_traffic_events "
+                                          "WHERE application_id=%s", (app,)).fetchone()["count"], 1)
+            failed = uuid.uuid4()
+            conn.execute("INSERT INTO hosting.releases(id,organization_id,application_id,node_id,requested_by,"
+                         "idempotency_key,image,port,health_path,memory_mb,cpu_milli,state,previous_release_id) "
+                         "VALUES (%s,%s,%s,%s,%s,%s,%s,8080,'/health',128,100,'FAILED',%s)",
+                         (failed, org, app, self.node, owner, uuid.uuid4(), self.image, release))
+        with psycopg.connect(self.worker, row_factory=dict_row, autocommit=True) as conn:
+            with patch("hosting_api.worker.restore_route") as restore, patch("hosting_api.worker.node_abort") as abort:
+                sweep_failed(conn, {})
+                restore.assert_not_called()
+                abort.assert_not_called()
+        with psycopg.connect(self.admin) as conn:
+            conn.execute("UPDATE hosting.releases SET cleanup_at=now() WHERE id=%s", (failed,))
+        resume = {"action": "resume", "reason": "Owner completed review",
+                  "confirm": "resume_application"}
+        with psycopg.connect(self.api, row_factory=dict_row) as conn:
+            with conn.transaction():
+                conn.execute("SELECT set_config('hosting.actor_sub',%s,true)", (owner,))
+                self.assertEqual(handler.traffic(conn, org, app, owner, resume, "POST", uuid.uuid4())[0], 202)
+        with psycopg.connect(self.worker, row_factory=dict_row, autocommit=True) as conn:
+            with patch("hosting_api.worker.publish", side_effect=RuntimeError("proof failed")):
+                self.assertTrue(process_traffic_once(conn, {}))
+            with psycopg.connect(self.admin, row_factory=dict_row) as admin:
+                self.assertEqual(admin.execute("SELECT traffic_state FROM hosting.applications WHERE id=%s",
+                                               (app,)).fetchone()["traffic_state"], "RESUMING")
+                admin.execute("UPDATE hosting.applications SET traffic_next_attempt_at=now() WHERE id=%s", (app,))
+            with patch("hosting_api.worker.publish", return_value={"state": "SERVING"}) as proof:
+                self.assertTrue(process_traffic_once(conn, {}))
+                self.assertEqual(proof.call_args.args[1]["id"], release)
+                self.assertIsNone(proof.call_args.args[1]["previous_release_id"])
+        with psycopg.connect(self.admin, row_factory=dict_row) as conn:
+            state = conn.execute("SELECT traffic_state,traffic_last_error FROM hosting.applications WHERE id=%s",
+                                 (app,)).fetchone()
+            self.assertEqual((state["traffic_state"], state["traffic_last_error"]), ("ACTIVE", None))
+            self.assertEqual(conn.execute("SELECT count(*) FROM hosting.application_traffic_events "
+                                          "WHERE application_id=%s", (app,)).fetchone()["count"], 2)
 
     def test_rls_and_durable_release(self):
         handler = Handler.__new__(Handler)

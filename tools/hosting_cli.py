@@ -90,6 +90,8 @@ def parser():
         "projects": ("org",), "project-create": ("org", "name"),
         "applications": ("org", "project"),
         "application-create": ("org", "project", "name", "environment"),
+        "traffic": ("org", "app"), "suspend": ("org", "app", "reason"),
+        "resume": ("org", "app", "reason"),
         "domain": ("org", "app"), "domain-register": ("org", "app", "hostname"),
         "domain-verify": ("org", "app"), "builds": ("org", "app"),
         "releases": ("org", "app"), "release-queue": ("org", "app", "image", "port",
@@ -142,6 +144,9 @@ def request_for(args):
         return path, ({"name": args.name, "environment": args.environment}
                       if name == "application-create" else None), None
     app = org + "/applications/" + identifier(args.app)
+    if name in ("traffic", "suspend", "resume"):
+        return app + "/traffic", (None if name == "traffic" else
+            {"action": name, "reason": args.reason, "confirm": name + "_application"}), None
     if name in ("domain", "domain-register", "domain-verify"):
         return app + ("/domain/verify" if name == "domain-verify" else "/domain"), \
             ({"hostname": args.hostname} if name == "domain-register" else

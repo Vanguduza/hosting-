@@ -48,9 +48,9 @@ class ApiContractTests(unittest.TestCase):
 
     def test_only_implemented_operations_are_advertised(self):
         paths = document()["paths"]
-        self.assertEqual(len(paths), 18)
+        self.assertEqual(len(paths), 19)
         self.assertEqual(sum(method in ("get", "post") for item in paths.values()
-                             for method in item), 25)
+                             for method in item), 27)
         self.assertNotIn("/v1/supabase", paths)
         self.assertEqual(paths["/v1/organizations/{organization_id}/team/invitations/revoke"]
                          ["post"]["requestBody"]["content"]["application/json"]["schema"]["required"],

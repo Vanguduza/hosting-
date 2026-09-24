@@ -115,6 +115,22 @@ def document():
                 obj({"name": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9 _.-]{0,79}$"},
                     "environment": {"type": "string",
                     "pattern": "^[a-z][a-z0-9-]{0,31}$"}}, ("name", "environment")))},
+        app + "/traffic": {
+            "get": operation("getApplicationTraffic", "Read public traffic control state", 200,
+                obj({"traffic": obj({"traffic_state": {"enum": ["ACTIVE", "SUSPENDING", "SUSPENDED", "RESUMING"]},
+                    "traffic_reason": {"type": ["string", "null"]},
+                    "traffic_requested_by": {"type": ["string", "null"]},
+                    "traffic_updated_at": DATE,
+                    "traffic_last_error": {"type": ["string", "null"]}},
+                    ("traffic_state", "traffic_reason", "traffic_requested_by", "traffic_updated_at",
+                     "traffic_last_error"))}, ("traffic",))),
+            "post": operation("changeApplicationTraffic", "Request owner-controlled route suspension or resume", 202,
+                obj({"state": {"enum": ["SUSPENDING", "RESUMING"]}, **audit}, ("state", "request_id")),
+                obj({"action": {"enum": ["suspend", "resume"]},
+                     "reason": {"type": "string", "minLength": 3, "maxLength": 240},
+                     "confirm": {"enum": ["suspend_application", "resume_application"]}},
+                    ("action", "reason", "confirm")),
+                description="Owner only. A 202 is intent; poll GET until SUSPENDED or ACTIVE for route proof.")},
         app + "/domain": {
             "get": operation("getDomain", "Read domain and pending TXT challenge", 200,
                 obj({"domain": {"oneOf": [{"type": "null"}, obj({"id": UUID, "hostname": STRING,
@@ -168,6 +184,9 @@ def document():
     paths[org + "/team/invitations"]["post"]["responses"]["200"] = response(
         obj({"id": UUID, "expires_at": DATE, "replayed": {"const": True}},
             ("id", "expires_at", "replayed")), "Matching invitation replay; token is not returned")
+    paths[app + "/traffic"]["post"]["responses"]["200"] = response(
+        obj({"state": STRING, "replayed": {"const": True}}, ("state", "replayed")),
+        "Existing state; no new transition")
     for path, item in paths.items():
         names = re.findall(r"\{([a-z_]+)\}", path)
         if names:
