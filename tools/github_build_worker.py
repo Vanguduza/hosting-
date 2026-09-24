@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -16,9 +17,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "services/api"))
 from hosting_api.migrate import verify as verify_schema
 
 
-def run(args, *, timeout=300, cwd=None):
+def run(args, *, timeout=300, cwd=None, git_env=None):
+    env = {key: value for key, value in os.environ.items()
+           if not (key.startswith("GIT_CONFIG_") or key in ("GIT_SSH", "GIT_SSH_COMMAND", "GIT_ASKPASS",
+                                                     "SSH_ASKPASS", "GIT_ALLOW_PROTOCOL"))}
+    env.update({"GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "/bin/false", "SSH_ASKPASS": "/bin/false",
+                "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null"})
+    if git_env:
+        env.update(git_env)
     process = subprocess.run(args, cwd=cwd, capture_output=True, text=True, timeout=timeout,
-                             check=False, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+                             check=False, env=env)
     if process.returncode:
         raise RuntimeError("Build step failed: " + Path(args[0]).name)
     return process.stdout.strip()
@@ -45,20 +53,60 @@ def claim(conn):
         return row, source, attempt
 
 
+def source_auth(source):
+    """Select only the key assigned to this exact registered GitHub repository."""
+    full_name = source["full_name"]
+    root_name = os.environ.get("GITHUB_DEPLOY_KEYS_DIR")
+    if not root_name:
+        return "https://github.com/" + full_name + ".git", {"GIT_ALLOW_PROTOCOL": "https"}
+    root = Path(root_name)
+    if not root.is_absolute() or root.is_symlink() or not root.is_dir() or \
+            root.stat().st_uid != os.geteuid() or root.stat().st_mode & 0o077:
+        raise RuntimeError("GitHub deploy-key directory must be owner-only")
+    repository_id = source["repository_id"]
+    if type(repository_id) is not int or repository_id <= 0:
+        raise RuntimeError("Registered GitHub repository ID invalid")
+    key = root / (str(repository_id) + ".key")
+    if not key.exists():
+        if key.is_symlink():
+            raise RuntimeError("GitHub deploy key cannot be a symlink")
+        return "https://github.com/" + full_name + ".git", {"GIT_ALLOW_PROTOCOL": "https"}
+    if key.is_symlink() or not key.is_file() or key.stat().st_uid != os.geteuid() or \
+            key.stat().st_mode & 0o077:
+        raise RuntimeError("GitHub deploy key must be an owner-only regular file")
+    known_name = os.environ.get("GITHUB_KNOWN_HOSTS_FILE", "")
+    known_hosts = Path(known_name)
+    if not known_hosts.is_absolute() or known_hosts.is_symlink() or not known_hosts.is_file() or \
+            known_hosts.stat().st_uid != os.geteuid() or known_hosts.stat().st_mode & 0o077:
+        raise RuntimeError("Pinned GitHub known-hosts file must be owner-only")
+    ssh = " ".join(["ssh", "-F", "/dev/null", "-i", shlex.quote(str(key)),
+                    "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=yes",
+                    "-o", "UserKnownHostsFile=" + shlex.quote(str(known_hosts)),
+                    "-o", "GlobalKnownHostsFile=/dev/null", "-o", "BatchMode=yes",
+                    "-o", "ForwardAgent=no", "-o", "UpdateHostKeys=no"])
+    return "ssh://git@github.com/" + full_name + ".git", {"GIT_SSH_COMMAND": ssh,
+                                                            "GIT_ALLOW_PROTOCOL": "ssh"}
+
+
 def checkout(source, commit, destination):
     full_name = source["full_name"]
     if (not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", full_name) or
             not re.fullmatch(r"[a-f0-9]{40}", commit) or
             not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,119}", source["branch"])):
         raise ValueError("Registered source or commit invalid")
-    url = "https://github.com/" + full_name + ".git"
+    url, auth = source_auth(source)
+    git_home = destination.parent / "git-home"
+    git_home.mkdir(mode=0o700)
+    auth = {**auth, "HOME": str(git_home), "XDG_CONFIG_HOME": str(git_home)}
     run(["git", "-c", "protocol.file.allow=never", "clone", "--no-checkout", "--single-branch",
-         "--branch", source["branch"], "--filter=blob:none", "--depth", "1", url, str(destination)], timeout=300)
-    if run(["git", "rev-parse", "HEAD"], cwd=destination, timeout=20) != commit:
-        run(["git", "fetch", "--depth", "1", "origin", commit], cwd=destination, timeout=120)
-    run(["git", "checkout", "--detach", commit], cwd=destination, timeout=120)
-    if run(["git", "rev-parse", "HEAD"], cwd=destination, timeout=20) != commit or \
-            run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=destination, timeout=20):
+         "--branch", source["branch"], "--filter=blob:none", "--depth", "1", url, str(destination)],
+        timeout=300, git_env=auth)
+    if run(["git", "rev-parse", "HEAD"], cwd=destination, timeout=20, git_env=auth) != commit:
+        run(["git", "fetch", "--depth", "1", "origin", commit], cwd=destination, timeout=120, git_env=auth)
+    run(["git", "checkout", "--detach", commit], cwd=destination, timeout=120, git_env=auth)
+    if run(["git", "rev-parse", "HEAD"], cwd=destination, timeout=20, git_env=auth) != commit or \
+            run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=destination,
+                timeout=20, git_env=auth):
         raise RuntimeError("Trusted checkout differs from delivery commit")
 
 
