@@ -22,7 +22,9 @@ def node_tls(directory):
     def openssl(*args):
         subprocess.run(["openssl", *args], check=True, capture_output=True, timeout=30)
     openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
-            "-subj", "/CN=DialCI", "-keyout", str(root / "ca.key"), "-out", str(root / "ca.crt"))
+            "-subj", "/CN=DialCI", "-addext", "basicConstraints=critical,CA:TRUE",
+            "-addext", "keyUsage=critical,keyCertSign,cRLSign",
+            "-keyout", str(root / "ca.key"), "-out", str(root / "ca.crt"))
     for label, subject, extension in (("server", "127.0.0.1", "serverAuth"),
                                       ("client", "ci-worker", "clientAuth")):
         openssl("req", "-newkey", "rsa:2048", "-nodes", "-subj", "/CN=" + subject,
