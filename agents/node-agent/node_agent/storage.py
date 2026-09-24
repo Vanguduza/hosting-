@@ -10,6 +10,13 @@ import uuid
 from .core import IMAGE, OperationError
 from .postgres import identifier, inspect
 
+LAUNCH = ('IFS= read -r GARAGE_DEFAULT_ACCESS_KEY < /run/secrets/access_key || '
+          '[ -n "$GARAGE_DEFAULT_ACCESS_KEY" ]; '
+          'IFS= read -r GARAGE_DEFAULT_SECRET_KEY < /run/secrets/secret_key || '
+          '[ -n "$GARAGE_DEFAULT_SECRET_KEY" ]; '
+          'export GARAGE_DEFAULT_ACCESS_KEY GARAGE_DEFAULT_SECRET_KEY; '
+          'exec /garage server --single-node --default-bucket')
+
 
 def names(instance):
     return "dial-s3-" + instance, "dial-s3-net-" + instance, "dial-s3-data-" + instance
@@ -179,12 +186,6 @@ def provision(node, data):
                 node.runner(["docker", "volume", "create", "--label", "dial.storage=" + instance, volume], 30)
             # Keys enter through read-only files inside the container. Neither
             # the Docker command nor inspectable Config.Env contains their values.
-            launch = ('IFS= read -r GARAGE_DEFAULT_ACCESS_KEY < /run/secrets/access_key || '
-                      '[ -n "$GARAGE_DEFAULT_ACCESS_KEY" ]; '
-                      'IFS= read -r GARAGE_DEFAULT_SECRET_KEY < /run/secrets/secret_key || '
-                      '[ -n "$GARAGE_DEFAULT_SECRET_KEY" ]; '
-                      'export GARAGE_DEFAULT_ACCESS_KEY GARAGE_DEFAULT_SECRET_KEY; '
-                      'exec /garage server --single-node --default-bucket')
             node.runner(["docker", "run", "-d", "--name", container,
                          "--label", "dial.storage=" + instance, "--label", "dial.application=" + app,
                          "--network", network, "--restart=unless-stopped", "--read-only",
@@ -199,7 +200,7 @@ def provision(node, data):
                          "--mount", "type=bind,src=" + str(mounted / "secret_key") +
                                     ",dst=/run/secrets/secret_key,readonly",
                          "-e", "GARAGE_DEFAULT_BUCKET=" + bucket,
-                         "--entrypoint", "/bin/sh", launcher, "-ec", launch], 120)
+                         "--entrypoint", "/bin/sh", launcher, "-ec", LAUNCH], 120)
         deadline = time.monotonic() + 90
         while time.monotonic() < deadline:
             current = inspect(node, container)

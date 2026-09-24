@@ -1,5 +1,6 @@
 """Real Garage S3 proof: private network, signed object I/O and durable restart."""
 import json
+import hashlib
 import http.client
 import os
 import subprocess
@@ -99,6 +100,56 @@ class StorageRuntime(unittest.TestCase):
                 self.assertEqual(provision(node, payload), receipt)
                 self.assertEqual(first_client.get_object(Bucket=bucket_name(first), Key="durable.txt")["Body"].read(),
                                  b"safe-data")
+                if os.environ.get("STORAGE_RUNTIME_BACKUP"):
+                    sys.path.insert(0, str(ROOT / "tools"))
+                    from storage_backup import backup_all, configuration, restore_drill
+                    secret_file = Path(temp) / "restic-password"
+                    secret_file.write_text("disposable-storage-backup-test-password")
+                    os.chmod(secret_file, 0o600)
+                    directories = {key: Path(temp) / value for key, value in (
+                        ("BACKUP_EVIDENCE_DIR", "evidence"), ("BACKUP_TMP_DIR", "backup-tmp"),
+                        ("BACKUP_PROBE_DIR", "probes"))}
+                    for directory in directories.values():
+                        directory.mkdir(mode=0o700)
+                    for resource, content, values in ((first, b"safe-data", secret),
+                                                     (second, b"foreign-data", other_secret)):
+                        address = json.loads(subprocess.check_output(["docker", "inspect", names(resource)[0]]))[0][
+                            "NetworkSettings"]["Networks"][names(resource)[1]]["IPAddress"]
+                        s3(address, values["access_key"], values["secret_key"]).put_object(
+                            Bucket=bucket_name(resource), Key="durable.txt", Body=content)
+                        probe_file = directories["BACKUP_PROBE_DIR"] / (resource + ".json")
+                        probe_file.write_text(json.dumps({"key": "durable.txt", "sha256": hashlib.sha256(content).hexdigest(),
+                                                          "size_bytes": len(content)}))
+                        os.chmod(probe_file, 0o600)
+                    setting = {"RESTIC_REPOSITORY": str(Path(temp) / "repository"),
+                               "RESTIC_PASSWORD_FILE": str(secret_file),
+                               "NODE_STATE_FILE": str(Path(temp) / "state.sqlite3"),
+                               "NODE_SECRETS_DIR": str(node.secrets_dir),
+                               **{key: str(value) for key, value in directories.items()}}
+                    previous_backup = {key: os.environ.get(key) for key in setting}
+                    os.environ.update(setting)
+                    try:
+                        subprocess.run(["restic", "init"], check=True, capture_output=True)
+                        evidence, backed_node, helper = configuration(offhost=False)
+                        result = backup_all(evidence, backed_node, helper)
+                        self.assertEqual(result["state"], "FLEET_BACKUP_VERIFIED")
+                        self.assertEqual(result["instances"], 2)
+                        receipts = {entry["instance_id"]: entry["snapshot_id"] for entry in result["receipts"]}
+                        for resource in (first, second):
+                            self.assertEqual(json.loads((evidence / (receipts[resource] + ".json")).read_text())[
+                                "state"], "RESTORE_VERIFIED")
+                        probe_file = directories["BACKUP_PROBE_DIR"] / (first + ".json")
+                        probe = json.loads(probe_file.read_text())
+                        probe["sha256"] = "0" * 64
+                        probe_file.write_text(json.dumps(probe))
+                        with self.assertRaisesRegex(RuntimeError, "probe changed"):
+                            restore_drill(first, receipts[first], evidence, backed_node, helper)
+                    finally:
+                        for key, value in previous_backup.items():
+                            if value is None:
+                                os.environ.pop(key, None)
+                            else:
+                                os.environ[key] = value
                 with self.assertRaises(OperationError):
                     provision(node, {**payload, "application_id": foreign_app})
                 web = os.environ["STORAGE_RUNTIME_WEB_IMAGE"]

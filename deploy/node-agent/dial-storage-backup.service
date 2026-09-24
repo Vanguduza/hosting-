@@ -1,0 +1,14 @@
+[Unit]
+Description=DIAL Garage encrypted backup and isolated semantic restore verification
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/dial-hosting/storage-backup.env
+ExecStart=/opt/dial-hosting/storage-backup/bin/python /opt/dial-hosting/storage_backup.py backup-all
+TimeoutStartSec=6h
+NoNewPrivileges=yes
+UMask=0077
