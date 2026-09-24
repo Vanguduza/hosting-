@@ -37,4 +37,11 @@ Every stateful service has a distinct backup and recovery receipt. Placement is 
 
 ## Current evidence
 
-Repository code and static tests are evidence for tenant scope, authentication boundaries, schema and pack consistency only. No Docker engine or production nodes were available in this session. All runtime/commercial certificates remain false.
+Repository code, static tests, and disposable GitHub Actions jobs provide partial
+evidence for tenant scope, authentication boundaries, schema consistency,
+PostgreSQL and Valkey resource lifecycles, encrypted logical backup with a
+read-only semantic restore probe, Docker isolation, and Traefik TLS routing
+with a per-client rate limit. The CI hosts are ephemeral and are not a
+production estate. No production node, offsite backup target, provider
+integration, or live rootless builder has been certified. Build, runtime,
+production, and owner-acceptance flags remain false in PACK_MANIFEST.json.
