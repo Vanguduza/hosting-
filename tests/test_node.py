@@ -140,6 +140,11 @@ class NodeTests(unittest.TestCase):
             self.assertEqual(node.route(route)["state"], "ROUTED")
             route_file = node.routes_dir / (first["application_id"] + ".toml")
             document = tomllib.loads(route_file.read_text())
+            name = "app-" + first["application_id"]
+            self.assertEqual(document["http"]["routers"][name]["middlewares"],
+                             [name + "-rate", name + "-receipt"])
+            self.assertEqual(document["http"]["middlewares"][name + "-rate"]["rateLimit"],
+                             {"average": 20, "burst": 40, "period": "1s"})
             self.assertEqual(document["http"]["middlewares"]["app-" + first["application_id"] + "-receipt"]
                              ["headers"]["customResponseHeaders"]["X-Dial-Release"], first["release_id"])
             before = route_file.read_bytes()

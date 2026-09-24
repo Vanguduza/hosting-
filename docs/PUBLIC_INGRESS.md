@@ -6,6 +6,11 @@ does not need a Docker socket inside Traefik. The node agent writes one validate
 file-provider document per application. Each HTTPS response includes
 `X-Dial-Release`, and the worker verifies that header over a trusted TLS
 connection to the registered public node IP before committing `SERVING`.
+Each application route has a Traefik rate limit of 20 requests per second per
+remote address, with a burst of 40. Excess requests receive HTTP 429. This
+assumes clients connect directly to the ingress: a reverse proxy in front
+would make its address the shared rate-limit key. The limit is local to the
+selected node and does not replace capacity limits or abuse monitoring.
 Each application runs on its own labeled Docker bridge. The node agent joins
 Traefik to that application's bridge only after verifying container ownership
 and private health; unrelated application containers cannot resolve each
