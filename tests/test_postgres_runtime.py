@@ -71,22 +71,38 @@ class PostgresRuntime(unittest.TestCase):
                 self.assertIn("CACHE_PASSWORD_FILE=/run/secrets/valkey_password", workload["Config"]["Env"])
                 if os.environ.get("POSTGRES_RUNTIME_BACKUP"):
                     backup_env = {key: os.environ.get(key) for key in
-                                  ("RESTIC_REPOSITORY", "RESTIC_PASSWORD_FILE", "BACKUP_EVIDENCE_DIR")}
+                                  ("RESTIC_REPOSITORY", "RESTIC_PASSWORD_FILE", "BACKUP_EVIDENCE_DIR",
+                                   "BACKUP_PROBE_DIR")}
                     try:
                         repository = Path(temp) / "restic"
                         evidence = Path(temp) / "evidence"
                         restic_password = Path(temp) / "restic-password"
                         restic_password.write_text("disposable-only-credential-" + uuid.uuid4().hex)
                         os.chmod(restic_password, 0o600)
+                        probes = Path(temp) / "probes"
+                        probes.mkdir(mode=0o700)
+                        probe = probes / (instance + ".json")
+                        probe.write_text(json.dumps({"name": "durable_canary", "sql":
+                            "SELECT count(*) FROM durable_test WHERE value=42", "expected": "1"}))
+                        os.chmod(probe, 0o600)
                         os.environ.update(RESTIC_REPOSITORY=str(repository),
                                           RESTIC_PASSWORD_FILE=str(restic_password),
-                                          BACKUP_EVIDENCE_DIR=str(evidence))
+                                          BACKUP_EVIDENCE_DIR=str(evidence), BACKUP_PROBE_DIR=str(probes))
                         run(["restic", "init"], 120)
                         directory, image = configuration(offhost=False)
                         snapshot = backup(instance, directory)
                         self.assertEqual(snapshot["state"], "BACKUP_CREATED")
+                        probe.write_text(json.dumps({"name": "durable_canary", "sql":
+                            "SELECT count(*) FROM durable_test WHERE value=42", "expected": "2"}))
+                        with self.assertRaisesRegex(RuntimeError, "semantic probe failed"):
+                            restore_drill(instance, snapshot["snapshot_id"], directory, image)
+                        self.assertEqual(json.loads((directory / (snapshot["snapshot_id"] + ".json")).read_text())["state"],
+                                         "BACKUP_CREATED")
+                        probe.write_text(json.dumps({"name": "durable_canary", "sql":
+                            "SELECT count(*) FROM durable_test WHERE value=42", "expected": "1"}))
                         verified = restore_drill(instance, snapshot["snapshot_id"], directory, image)
                         self.assertEqual(verified["state"], "RESTORE_VERIFIED")
+                        self.assertEqual(verified["semantic_probe"], "durable_canary")
                         self.assertGreaterEqual(verified["restored_table_count"], 1)
                         fleet = backup_all(directory, image)
                         self.assertEqual(fleet["state"], "FLEET_BACKUP_VERIFIED")

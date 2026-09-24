@@ -93,6 +93,30 @@ def save(evidence, receipt):
     return path
 
 
+def restore_probe(instance):
+    """Load an operator-reviewed, instance-specific semantic restore assertion."""
+    directory = os.environ.get("BACKUP_PROBE_DIR")
+    if not directory:
+        raise RuntimeError("BACKUP_PROBE_DIR required for semantic restore verification")
+    root = Path(directory)
+    if root.is_symlink() or not root.is_dir() or root.stat().st_mode & 0o077 or \
+            root.stat().st_uid != os.geteuid():
+        raise RuntimeError("Restore probe directory must be owner-only")
+    path = root / (ident(instance) + ".json")
+    if path.is_symlink() or not path.is_file() or path.stat().st_mode & 0o077 or \
+            path.stat().st_uid != os.geteuid():
+        raise RuntimeError("Instance restore probe must be an owner-only regular file")
+    contract = json.loads(path.read_text(encoding="utf-8"))
+    if set(contract) != {"name", "sql", "expected"} or \
+            not isinstance(contract["name"], str) or not re.fullmatch(r"[a-z][a-z0-9_]{2,63}", contract["name"]) or \
+            not isinstance(contract["sql"], str) or not re.match(r"^SELECT\s", contract["sql"], re.I) or \
+            len(contract["sql"]) > 2048 or ";" in contract["sql"] or \
+            not isinstance(contract["expected"], str) or not 1 <= len(contract["expected"]) <= 256 or \
+            "\n" in contract["expected"]:
+        raise RuntimeError("Invalid instance restore probe contract")
+    return contract
+
+
 def backup(instance, evidence):
     container = owned_instance(instance)
     with tempfile.TemporaryDirectory(prefix="dial-client-backup-") as temp:
@@ -125,6 +149,7 @@ def restore_drill(instance, snapshot, evidence, image):
     receipt = json.loads(path.read_text())
     if receipt["instance_id"] != instance or receipt["snapshot_id"] != snapshot:
         raise RuntimeError("Snapshot does not belong to the selected instance")
+    probe = restore_probe(instance)
     drill = uuid.uuid4().hex
     container, network, volume = "dial-pg-drill-" + drill, "dial-pg-drill-net-" + drill, "dial-pg-drill-data-" + drill
     with tempfile.TemporaryDirectory(prefix="dial-client-restore-") as temp:
@@ -168,8 +193,17 @@ def restore_drill(instance, snapshot, evidence, image):
             count = int(run(["docker", "exec", "-u", "postgres", container, "psql", "-X", "-At",
                              "-U", "postgres", "-d", "appdb", "-c",
                              "SELECT count(*) FROM pg_class WHERE relkind='r' AND relnamespace='public'::regnamespace"], 20).strip())
-            # pg_restore succeeds only after replaying every archive entry.
-            # A table count documents the restored shape without reading client data.
+            # The probe runs inside a read-only transaction in the isolated
+            # target. An operator-owned contract states the expected value;
+            # a table count alone is not application-semantic evidence.
+            output = run(["docker", "exec", "-u", "postgres", container, "psql", "-X", "-At",
+                          "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "appdb",
+                          "-c", "BEGIN READ ONLY", "-c", "SET LOCAL statement_timeout = '5s'",
+                          "-c", probe["sql"], "-c", "ROLLBACK"], 20)
+            lines = output.splitlines()
+            if len(lines) != 4 or lines[0] != "BEGIN" or lines[1] != "SET" or \
+                    lines[2] != probe["expected"] or lines[3] != "ROLLBACK":
+                raise RuntimeError("Restored application semantic probe failed")
         finally:
             if created_container:
                 run(["docker", "rm", "-f", container], 60)
@@ -180,6 +214,9 @@ def restore_drill(instance, snapshot, evidence, image):
     receipt["state"] = "RESTORE_VERIFIED"
     receipt["restore_verified_at"] = datetime.now(timezone.utc).isoformat()
     receipt["restored_table_count"] = count
+    receipt["semantic_probe"] = probe["name"]
+    receipt["semantic_probe_sha256"] = hashlib.sha256(
+        json.dumps(probe, sort_keys=True).encode()).hexdigest()
     temporary = path.with_suffix(".tmp")
     fd = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as file:
