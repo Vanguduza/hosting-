@@ -133,8 +133,9 @@ jobs:
       - run: python -m pip install boto3==1.43.101
       - run: docker pull dxflrs/garage:v2.3.0
       - run: docker pull busybox:1.37.0-musl
-      - run: echo "STORAGE_RUNTIME_IMAGE=dxflrs/garage:v2.3.0@sha256:$(docker image inspect dxflrs/garage:v2.3.0 --format '{{index .RepoDigests 0}}' | cut -d: -f2)" >> "$GITHUB_ENV"
-      - run: echo "STORAGE_SHELL_IMAGE=busybox:1.37.0-musl@sha256:$(docker image inspect busybox:1.37.0-musl --format '{{index .RepoDigests 0}}' | cut -d: -f2)" >> "$GITHUB_ENV"
+      - run: |
+          echo "STORAGE_RUNTIME_IMAGE=dxflrs/garage:v2.3.0@sha256:$(docker image inspect dxflrs/garage:v2.3.0 --format '{{index .RepoDigests 0}}' | cut -d: -f2)" >> "$GITHUB_ENV"
+          echo "STORAGE_SHELL_IMAGE=busybox:1.37.0-musl@sha256:$(docker image inspect busybox:1.37.0-musl --format '{{index .RepoDigests 0}}' | cut -d: -f2)" >> "$GITHUB_ENV"
       - run: docker run -d --name dial-s3-ci-registry -p 127.0.0.1:5000:5000 registry:3
       - run: docker build -t 127.0.0.1:5000/dial-ci/s3-web:test tests/fixtures/web
       - run: docker push 127.0.0.1:5000/dial-ci/s3-web:test
