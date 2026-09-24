@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 from backup_health import evaluate
 from control_backup import backup, environment, verify
+from control_physical_backup import backup as physical_backup, verify as physical_verify
 
 
 @unittest.skipUnless(os.environ.get("TEST_ADMIN_DSN") and os.environ.get("CONTROL_RUNTIME_BACKUP"),
@@ -44,6 +45,14 @@ class ControlBackupRuntime(unittest.TestCase):
                 self.assertEqual(evaluate("control", evidence, check_remote=True)["state"], "BACKUP_HEALTHY")
                 self.assertEqual(json.loads((evidence / (verified["snapshot_id"] + ".json")).read_text())[
                     "state"], "RESTORE_VERIFIED")
+                physical_evidence = root / "control-physical-evidence"
+                physical_evidence.mkdir(mode=0o700)
+                physical = physical_backup(physical_evidence)
+                self.assertEqual(physical["state"], "BACKUP_CREATED")
+                restored = physical_verify(physical_evidence, physical["snapshot_id"],
+                                            os.environ["CONTROL_POSTGRES_IMAGE"])
+                self.assertEqual(restored["state"], "RESTORE_VERIFIED")
+                self.assertGreaterEqual(restored["semantic_counts"]["organizations"], 2)
                 with patch.dict(os.environ, {"PGUSER": api_dsn.username, "PGPASSFILE": str(pgpass)}):
                     with self.assertRaisesRegex(RuntimeError, "cannot see every tenant"):
                         backup(evidence)

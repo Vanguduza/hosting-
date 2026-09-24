@@ -93,6 +93,23 @@ class ReceiptTests(unittest.TestCase):
             self.assertEqual(evaluate("postgres-physical", evidence, instances={instance}, now=now)["state"],
                              "BACKUP_HEALTHY")
 
+    def test_control_physical_health_requires_distinct_receipt(self):
+        now = datetime(2026, 9, 24, tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence = Path(temporary) / "control-physical-evidence"
+            evidence.mkdir(mode=0o700)
+            row = {"snapshot_id": "a" * 64, "archive_sha256": "b" * 64,
+                   "created_at": now.isoformat(), "restore_verified_at": now.isoformat(),
+                   "state": "RESTORE_VERIFIED"}
+            path = evidence / (row["snapshot_id"] + ".json")
+            path.write_text(json.dumps(row))
+            os.chmod(path, 0o600)
+            with self.assertRaisesRegex(RuntimeError, "physical backup provenance"):
+                evaluate("control-physical", evidence, now=now)
+            row["format"] = "pg_basebackup_tar_wal_fetch"
+            path.write_text(json.dumps(row))
+            self.assertEqual(evaluate("control-physical", evidence, now=now)["state"], "BACKUP_HEALTHY")
+
     def test_valkey_backup_offhost_and_probe_contract(self):
         instance = str(uuid.uuid4())
         with tempfile.TemporaryDirectory() as temporary:

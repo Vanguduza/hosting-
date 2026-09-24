@@ -93,19 +93,21 @@ def remote_snapshot_ids():
 
 
 def evaluate(kind, evidence, max_age_hours=36, min_instances=0, now=None, instances=None, check_remote=False):
-    if kind not in (*KINDS, "control", "openbao"):
+    if kind not in (*KINDS, "control", "control-physical", "openbao"):
         raise ValueError("Unknown backup class")
     if type(max_age_hours) not in (int, float) or not 1 <= max_age_hours <= 720 or \
             type(min_instances) is not int or not 0 <= min_instances <= 100000:
         raise ValueError("Invalid backup freshness policy")
     now = now or datetime.now(timezone.utc)
-    expected = {kind} if kind in ("control", "openbao") else inventory(kind) if instances is None else set(instances)
+    expected = {kind} if kind in ("control", "control-physical", "openbao") else inventory(kind) if instances is None else set(instances)
     if len(expected) < min_instances:
         raise RuntimeError("Backup resource count below required minimum")
     by_resource = {resource: [] for resource in expected}
     for row in receipts(Path(evidence)):
-        if kind in ("control", "openbao") and "instance_id" in row:
+        if kind in ("control", "control-physical", "openbao") and "instance_id" in row:
             raise RuntimeError("Authority receipt has a resource ID")
+        if kind == "control-physical" and row.get("format") != "pg_basebackup_tar_wal_fetch":
+            raise RuntimeError("Control physical backup provenance invalid")
         if kind == "openbao" and (not isinstance(row.get("cluster_id"), str) or
                                    not re.fullmatch(r"dial/data/resources/[0-9a-f-]{36}", row.get("probe_path", "")) or
                                    not HEX.fullmatch(row.get("probe_sha256", "")) or
@@ -114,7 +116,7 @@ def evaluate(kind, evidence, max_age_hours=36, min_instances=0, now=None, instan
         if kind == "postgres-physical" and (row.get("format") != "pg_basebackup_tar_wal_fetch" or
                                             not HEX.fullmatch(row.get("probe_sha256", ""))):
             raise RuntimeError("PostgreSQL physical backup provenance invalid")
-        resource = kind if kind in ("control", "openbao") else row.get("instance_id")
+        resource = kind if kind in ("control", "control-physical", "openbao") else row.get("instance_id")
         if kind in KINDS:
             try:
                 if str(uuid.UUID(resource)) != resource:
@@ -149,7 +151,7 @@ def evaluate(kind, evidence, max_age_hours=36, min_instances=0, now=None, instan
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("kind", choices=[*KINDS, "control", "openbao"])
+    parser.add_argument("kind", choices=[*KINDS, "control", "control-physical", "openbao"])
     parser.add_argument("evidence_dir", type=Path)
     parser.add_argument("--max-age-hours", type=int, default=36)
     parser.add_argument("--min-instances", type=int, default=0)
