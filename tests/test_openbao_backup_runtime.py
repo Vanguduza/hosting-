@@ -32,12 +32,15 @@ class RaftRecovery(unittest.TestCase):
         names = ["dial-raft-ci-" + uuid.uuid4().hex[:9] for _ in range(2)]
         with tempfile.TemporaryDirectory(prefix="dial-raft-test-") as directory:
             root = Path(directory)
+            # The disposable server's non-root UID must traverse TLS and HCL
+            # mounts; the production backup credentials below stay owner-only.
+            os.chmod(root, 0o711)
             certificate, key = root / "cert.pem", root / "key.pem"
             subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
                             "-subj", "/CN=localhost", "-addext", "subjectAltName=IP:127.0.0.1,DNS:localhost",
                             "-keyout", str(key), "-out", str(certificate)], check=True, capture_output=True)
             os.chmod(certificate, 0o600)
-            os.chmod(key, 0o600)
+            os.chmod(key, 0o644)
             context = ssl.create_default_context(cafile=str(certificate))
 
             def request(port, method, path, token=None, payload=None):
@@ -52,17 +55,17 @@ class RaftRecovery(unittest.TestCase):
                 return json.loads(raw) if raw else {}
 
             def server(name, port):
-                state = root / name
-                state.mkdir(mode=0o700)
-                config = state / "server.hcl"
+                config = root / (name + ".hcl")
                 config.write_text('ui = false\ndisable_mlock = true\n'
                                   'api_addr = "https://127.0.0.1:8200"\n'
                                   'cluster_addr = "https://127.0.0.1:8201"\n'
                                   'storage "raft" { path = "/data" node_id = "' + name + '" }\n'
                                   'listener "tcp" { address = "0.0.0.0:8200" '
                                   'tls_cert_file = "/tls/cert.pem" tls_key_file = "/tls/key.pem" }\n')
+                os.chmod(config, 0o644)
+                docker("volume", "create", name)
                 docker("run", "-d", "--name", name, "--user", "0:0", "-p", f"127.0.0.1:{port}:8200",
-                       "-v", f"{state}:/data", "-v", f"{config}:/etc/openbao/server.hcl:ro",
+                       "-v", f"{name}:/data", "-v", f"{config}:/etc/openbao/server.hcl:ro",
                        "-v", f"{root}:/tls:ro", os.environ["OPENBAO_TEST_IMAGE"],
                        "server", "-config=/etc/openbao/server.hcl")
                 deadline = time.monotonic() + 90
@@ -133,6 +136,7 @@ class RaftRecovery(unittest.TestCase):
             finally:
                 for name in names:
                     subprocess.run(["docker", "rm", "-f", name], capture_output=True)
+                    subprocess.run(["docker", "volume", "rm", "-f", name], capture_output=True)
 
 
 if __name__ == "__main__":
