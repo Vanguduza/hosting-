@@ -510,6 +510,9 @@ class Handler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         if path == "/live" and method == "GET":
             return self.reply(200, {"status": "process_alive"})
+        if path == "/openapi.json" and method == "GET":
+            from .openapi import document
+            return self.reply(200, document())
         try:
             actor = authenticate(self.headers.get("Authorization"), self.server.jwks)
             if method == "POST":
