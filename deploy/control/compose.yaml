@@ -43,6 +43,7 @@ services:
       DB_PASSWORD_FILE: /run/secrets/pg_api
       OIDC_ISSUER: ${OIDC_ISSUER:?Configure a real OIDC issuer}
       OIDC_AUDIENCE: ${OIDC_AUDIENCE:?Configure a dedicated API audience}
+      OIDC_SERVICE_AUDIENCE: ${OIDC_SERVICE_AUDIENCE:?Configure a distinct service token audience}
       OIDC_JWKS_URL: ${OIDC_JWKS_URL:?Configure a real HTTPS JWKS URL}
     secrets: [pg_api]
     depends_on:

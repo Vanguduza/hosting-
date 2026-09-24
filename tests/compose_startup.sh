@@ -8,6 +8,7 @@ fi
 
 export OIDC_ISSUER=https://issuer.example.org
 export OIDC_AUDIENCE=dial-hosting-ci
+export OIDC_SERVICE_AUDIENCE=dial-hosting-service-ci
 export OIDC_JWKS_URL=https://issuer.example.org/jwks
 export COMPOSE_PROJECT_NAME="dial-hosting-ci-${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}"
 secrets=deploy/control/.secrets
@@ -33,9 +34,9 @@ for i in {1..30}; do
 done
 curl --fail --silent http://127.0.0.1:8080/live >/dev/null
 test "$("${compose[@]}" exec -T db psql -U postgres -d hosting -At \
-  -c 'SELECT count(*) FROM hosting.schema_migrations')" = 14
+  -c 'SELECT count(*) FROM hosting.schema_migrations')" = 15
 "${compose[@]}" exec -T db psql -U postgres -d hosting -v ON_ERROR_STOP=1 \
-  -c "UPDATE hosting.schema_migrations SET sha256=repeat('0',64) WHERE version=14" >/dev/null
+  -c "UPDATE hosting.schema_migrations SET sha256=repeat('0',64) WHERE version=15" >/dev/null
 
 # A formerly successful migration container must not let a restarted API serve
 # against drifted history. Force a new service container without touching data.

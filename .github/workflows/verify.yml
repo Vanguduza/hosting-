@@ -27,6 +27,7 @@ jobs:
         env:
           OIDC_ISSUER: https://issuer.example.org
           OIDC_AUDIENCE: dial-hosting-ci
+          OIDC_SERVICE_AUDIENCE: dial-hosting-service-ci
           OIDC_JWKS_URL: https://issuer.example.org/jwks
           BAO_ADDR: https://bao.example.org
   postgres:

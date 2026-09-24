@@ -102,6 +102,8 @@ def parser():
         "team-invitations": ("org",), "team-invite": ("org", "role", "expires_hours"),
         "team-revoke": ("org", "invitation_id"), "team-members": ("org",),
         "team-remove": ("org", "actor_sub"), "team-accept": (),
+        "service-accounts": ("org",), "service-grant": ("org", "app", "client_id", "actor_sub"),
+        "service-revoke": ("org", "id"),
     }
     for name, fields in arguments.items():
         command = commands.add_parser(name)
@@ -122,6 +124,15 @@ def request_for(args):
     if name == "team-accept":
         return "/v1/team/invitations/accept", {"token": private_file(args.invitation_file, "Invitation token")}, None
     org = "/v1/organizations/" + identifier(args.org)
+    if name in ("service-accounts", "service-grant", "service-revoke"):
+        path = org + "/service-accounts"
+        if name == "service-revoke":
+            return path + "/revoke", {"id": identifier(args.id),
+                                      "confirm": "revoke_service_account"}, None
+        if name == "service-grant":
+            return path, {"application_id": identifier(args.app), "client_id": args.client_id,
+                          "actor_sub": args.actor_sub}, None
+        return path, None, None
     if name in ("projects", "project-create"):
         return org + "/projects", ({"name": args.name} if name == "project-create" else None), None
     if name.startswith("team-"):

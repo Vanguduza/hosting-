@@ -4,6 +4,7 @@ import os
 import re
 import secrets
 import uuid
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
@@ -17,7 +18,7 @@ from .domains import new_token, txt_proves, valid_hostname
 
 
 def environment():
-    required = ("DB_HOST", "DB_NAME", "DB_USER", "DB_PASSWORD_FILE", "OIDC_ISSUER", "OIDC_AUDIENCE", "OIDC_JWKS_URL")
+    required = ("DB_HOST", "DB_NAME", "DB_USER", "DB_PASSWORD_FILE", "OIDC_ISSUER", "OIDC_AUDIENCE", "OIDC_SERVICE_AUDIENCE", "OIDC_JWKS_URL")
     missing = [key for key in required if not os.environ.get(key)]
     if missing:
         raise RuntimeError("Missing configuration: " + ", ".join(missing))
@@ -25,6 +26,8 @@ def environment():
     jwks = os.environ["OIDC_JWKS_URL"]
     if not issuer.startswith("https://") or not jwks.startswith("https://"):
         raise RuntimeError("OIDC issuer and JWKS URL must use HTTPS")
+    if os.environ["OIDC_AUDIENCE"] == os.environ["OIDC_SERVICE_AUDIENCE"]:
+        raise RuntimeError("Human and service token audiences must differ")
     if not os.path.isfile(os.environ["DB_PASSWORD_FILE"]):
         raise RuntimeError("DB password file unavailable")
     return jwt.PyJWKClient(jwks, cache_jwk_set=True, lifespan=300)
@@ -39,6 +42,12 @@ def database_dsn():
                          user=os.environ["DB_USER"], password=password)
 
 
+@dataclass(frozen=True)
+class Identity:
+    sub: str
+    client_id: str | None = None
+
+
 def authenticate(header, client):
     if not header or not header.startswith("Bearer "):
         raise PermissionError("Bearer token required")
@@ -49,14 +58,29 @@ def authenticate(header, client):
         key = client.get_signing_key_from_jwt(token)
         claims = jwt.decode(
             token, key.key, algorithms=["RS256", "ES256"],
-            issuer=os.environ["OIDC_ISSUER"], audience=os.environ["OIDC_AUDIENCE"],
+            issuer=os.environ["OIDC_ISSUER"],
+            audience=[os.environ["OIDC_AUDIENCE"], os.environ["OIDC_SERVICE_AUDIENCE"]],
             options={"require": ["exp", "iat", "sub", "iss", "aud"]}, leeway=30,
         )
         if not isinstance(claims["sub"], str) or not claims["sub"] or len(claims["sub"]) > 255:
             raise PermissionError("Invalid subject")
-        return claims["sub"]
+        audience = claims["aud"]
+        if audience == os.environ["OIDC_AUDIENCE"]:
+            return Identity(claims["sub"])
+        if audience != os.environ["OIDC_SERVICE_AUDIENCE"]:
+            raise PermissionError("Ambiguous audience")
+        client_id = claims.get("client_id")
+        if not isinstance(client_id, str) or not 1 <= len(client_id) <= 128:
+            raise PermissionError("Invalid client")
+        return Identity(claims["sub"], client_id)
     except (jwt.PyJWTError, ValueError) as exc:
         raise PermissionError("Invalid bearer token") from exc
+
+
+def service_route_allowed(path, method):
+    return (path == "/ready" and method == "GET") or bool(
+        method in ("GET", "POST") and re.fullmatch(
+            r"/v1/organizations/[0-9a-f-]{36}/applications/[0-9a-f-]{36}/releases", path))
 
 
 def record(conn, org_id, actor, action, resource, request_id):
@@ -99,6 +123,53 @@ class Handler(BaseHTTPRequestHandler):
             (org_id, actor),
         ).fetchone()
         return row["role"] if row else None
+
+    def service_accounts(self, conn, org_id, actor, body, method, request_id, revoke=False):
+        if self.membership(conn, org_id, actor) != "owner":
+            return 404, {"error": "not_found"}
+        if revoke:
+            if method != "POST" or set(body) != {"id", "confirm"} or body["confirm"] != "revoke_service_account":
+                return 400, {"error": "invalid_service_revoke"}
+            try:
+                account_id = uuid.UUID(body["id"])
+                if str(account_id) != body["id"]:
+                    raise ValueError()
+            except (ValueError, TypeError, AttributeError):
+                return 400, {"error": "invalid_service_revoke"}
+            # A release queue holds this lock through commit, so revocation and
+            # admission have a single deterministic order.
+            conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,3))", (str(account_id),))
+            row = conn.execute("UPDATE hosting.service_accounts SET revoked_at=now() "
+                               "WHERE organization_id=%s AND id=%s AND revoked_at IS NULL RETURNING id",
+                               (org_id, account_id)).fetchone()
+            if not row:
+                return 409, {"error": "service_account_unavailable"}
+            record(conn, org_id, actor, "service_account.revoke", account_id, request_id)
+            return 200, {"state": "REVOKED", "request_id": request_id}
+        if method == "GET":
+            rows = conn.execute("SELECT id,application_id,client_id,actor_sub,created_by,created_at,revoked_at "
+                                "FROM hosting.service_accounts WHERE organization_id=%s "
+                                "ORDER BY created_at DESC,id DESC LIMIT 100", (org_id,)).fetchall()
+            return 200, {"service_accounts": rows}
+        if method != "POST" or set(body) != {"application_id", "client_id", "actor_sub"} or \
+                not isinstance(body["client_id"], str) or not 1 <= len(body["client_id"]) <= 128 or \
+                not isinstance(body["actor_sub"], str) or not 1 <= len(body["actor_sub"]) <= 255:
+            return 400, {"error": "invalid_service_account"}
+        try:
+            app_id = uuid.UUID(body["application_id"])
+            if str(app_id) != body["application_id"]:
+                raise ValueError()
+        except (ValueError, TypeError, AttributeError):
+            return 400, {"error": "invalid_service_account"}
+        if not conn.execute("SELECT 1 FROM hosting.applications WHERE organization_id=%s AND id=%s",
+                            (org_id, app_id)).fetchone():
+            return 404, {"error": "not_found"}
+        account_id = uuid.uuid4()
+        conn.execute("INSERT INTO hosting.service_accounts(id,organization_id,application_id,client_id,actor_sub,created_by) "
+                     "VALUES (%s,%s,%s,%s,%s,%s)",
+                     (account_id, org_id, app_id, body["client_id"], body["actor_sub"], actor))
+        record(conn, org_id, actor, "service_account.create", account_id, request_id)
+        return 201, {"id": account_id, "application_id": app_id, "request_id": request_id}
 
     def team(self, conn, org_id, actor, body, method, request_id, action="invitations"):
         if self.membership(conn, org_id, actor) != "owner":
@@ -319,7 +390,18 @@ class Handler(BaseHTTPRequestHandler):
 
     def releases(self, conn, org_id, app_id, actor, body, method, request_id, rollback_of=None):
         role = self.membership(conn, org_id, actor)
-        if not allowed(role, "release:read" if method == "GET" else "release:create"):
+        service_client = conn.execute("SELECT current_setting('hosting.service_client_id',true) AS client_id").fetchone()["client_id"]
+        if service_client:
+            account = conn.execute("SELECT id FROM hosting.service_accounts WHERE organization_id=%s "
+                                   "AND application_id=%s AND actor_sub=%s AND client_id=%s AND revoked_at IS NULL",
+                                   (org_id, app_id, actor, service_client)).fetchone()
+            if not account:
+                return 404, {"error": "not_found"}
+            conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,3))", (str(account["id"]),))
+            if not conn.execute("SELECT 1 FROM hosting.service_accounts WHERE id=%s AND revoked_at IS NULL",
+                                (account["id"],)).fetchone():
+                return 404, {"error": "not_found"}
+        elif not allowed(role, "release:read" if method == "GET" else "release:create"):
             return 404, {"error": "not_found"}
         app = conn.execute("SELECT id,active_release_id FROM hosting.applications WHERE organization_id=%s AND id=%s",
                            (org_id, app_id)).fetchone()
@@ -557,7 +639,10 @@ class Handler(BaseHTTPRequestHandler):
             from .openapi import document
             return self.reply(200, document())
         try:
-            actor = authenticate(self.headers.get("Authorization"), self.server.jwks)
+            identity = authenticate(self.headers.get("Authorization"), self.server.jwks)
+            actor = identity.sub
+            if identity.client_id and not service_route_allowed(path, method):
+                return self.reply(404, {"error": "not_found"})
             if method == "POST":
                 length = int(self.headers.get("Content-Length", "0"))
                 if length < 1 or length > 8192:
@@ -572,6 +657,10 @@ class Handler(BaseHTTPRequestHandler):
                 with conn.transaction():
                     conn.execute("SET LOCAL search_path = hosting, pg_catalog")
                     conn.execute("SELECT set_config('hosting.actor_sub', %s, true)", (actor,))
+                    conn.execute("SELECT set_config('hosting.auth_kind', %s, true)",
+                                 ("service" if identity.client_id else "human",))
+                    if identity.client_id:
+                        conn.execute("SELECT set_config('hosting.service_client_id', %s, true)", (identity.client_id,))
                     if path == "/ready" and method == "GET":
                         conn.execute("SELECT 1")
                         result = (200, {"status": "database_reachable"})
@@ -584,6 +673,9 @@ class Handler(BaseHTTPRequestHandler):
                         result = (200, {"organizations": rows})
                     elif path == "/v1/team/invitations/accept" and method == "POST":
                         result = self.accept_invitation(conn, actor, body, request_id)
+                    elif match := re.fullmatch(r"/v1/organizations/([0-9a-f-]{36})/service-accounts(/revoke)?", path):
+                        result = self.service_accounts(conn, uuid.UUID(match.group(1)), actor, body, method,
+                                                       request_id, revoke=bool(match.group(2)))
                     elif match := re.fullmatch(r"/v1/organizations/([0-9a-f-]{36})/team/(invitations|invitations/revoke|members|members/remove)", path):
                         action = {"invitations": "invitations", "invitations/revoke": "revoke",
                                   "members": "members", "members/remove": "remove"}[match.group(2)]

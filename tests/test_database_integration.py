@@ -81,15 +81,68 @@ class DatabaseIntegration(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             destination = Path(temporary) / "schema"
             shutil.copytree(ROOT / "services/api/schema", destination)
-            (destination / "015_rollback_probe.sql").write_text(
+            (destination / "016_rollback_probe.sql").write_text(
                 "CREATE TABLE hosting.rollback_probe(id integer);\n"
                 "SELECT 1 / 0;\n", encoding="utf-8")
             with psycopg.connect(self.admin, autocommit=True) as conn:
                 with self.assertRaises(psycopg.errors.DivisionByZero):
                     apply_migrations(conn, destination)
                 self.assertIsNone(conn.execute("SELECT to_regclass('hosting.rollback_probe')").fetchone()[0])
-                self.assertEqual(conn.execute("SELECT count(*) FROM hosting.schema_migrations").fetchone()[0], 14)
+                self.assertEqual(conn.execute("SELECT count(*) FROM hosting.schema_migrations").fetchone()[0], 15)
                 verify_migrations(conn)
+
+    def test_service_account_application_scope_and_revoke(self):
+        app, other_app = uuid.uuid4(), uuid.uuid4()
+        with psycopg.connect(self.admin) as conn:
+            for app_id in (app, other_app):
+                conn.execute("INSERT INTO hosting.applications(id,organization_id,project_id,environment,name) "
+                             "VALUES (%s,%s,%s,'production',%s)",
+                             (app_id, self.org_a, self.project_a, "service-" + app_id.hex[:12]))
+                conn.execute("INSERT INTO hosting.domains(organization_id,application_id,hostname,"
+                             "verification_token,verified_at) VALUES (%s,%s,%s,%s,now())",
+                             (self.org_a, app_id, "svc-" + app_id.hex[:12] + ".example.org", "A" * 43))
+        handler = Handler.__new__(Handler)
+        client_id = "deploy-client-" + app.hex[:12]
+        grant = {"application_id": str(app), "client_id": client_id, "actor_sub": "alice"}
+        with psycopg.connect(self.api, row_factory=dict_row) as conn:
+            with conn.transaction():
+                conn.execute("SELECT set_config('hosting.actor_sub','alice',true)")
+                conn.execute("SELECT set_config('hosting.auth_kind','human',true)")
+                code, created = handler.service_accounts(conn, self.org_a, "alice", grant, "POST", uuid.uuid4())
+                self.assertEqual(code, 201)
+                account_id = created["id"]
+                self.assertEqual(handler.service_accounts(conn, self.org_a, "alice", {}, "GET", uuid.uuid4())[0], 200)
+        request = {"idempotency_key": str(uuid.uuid4()), "image": self.image, "port": 8080,
+                   "health_path": "/health", "memory_mb": 128, "cpu_milli": 100}
+        with psycopg.connect(self.api, row_factory=dict_row) as conn:
+            with conn.transaction():
+                conn.execute("SELECT set_config('hosting.actor_sub','alice',true)")
+                conn.execute("SELECT set_config('hosting.auth_kind','service',true)")
+                conn.execute("SELECT set_config('hosting.service_client_id',%s,true)", (client_id,))
+                self.assertIsNone(handler.membership(conn, self.org_a, "alice"))
+                self.assertEqual(conn.execute("SELECT count(*) FROM hosting.projects").fetchone()["count"], 0)
+                self.assertEqual(handler.service_accounts(conn, self.org_a, "alice", {}, "GET", uuid.uuid4())[0], 404)
+                self.assertEqual(handler.releases(conn, self.org_a, other_app, "alice", request,
+                                                  "POST", uuid.uuid4())[0], 404)
+                self.assertEqual(handler.releases(conn, self.org_b, app, "alice", request,
+                                                  "POST", uuid.uuid4())[0], 404)
+                self.assertEqual(handler.releases(conn, self.org_a, app, "alice", request,
+                                                  "POST", uuid.uuid4())[0], 202)
+                self.assertEqual(handler.releases(conn, self.org_a, app, "alice", request,
+                                                  "POST", uuid.uuid4())[1]["replayed"], True)
+        with psycopg.connect(self.api, row_factory=dict_row) as conn:
+            with conn.transaction():
+                conn.execute("SELECT set_config('hosting.actor_sub','alice',true)")
+                conn.execute("SELECT set_config('hosting.auth_kind','human',true)")
+                self.assertEqual(handler.service_accounts(conn, self.org_a, "alice",
+                                  {"id": str(account_id), "confirm": "revoke_service_account"},
+                                  "POST", uuid.uuid4(), revoke=True)[0], 200)
+            with conn.transaction():
+                conn.execute("SELECT set_config('hosting.actor_sub','alice',true)")
+                conn.execute("SELECT set_config('hosting.auth_kind','service',true)")
+                conn.execute("SELECT set_config('hosting.service_client_id',%s,true)", (client_id,))
+                self.assertEqual(handler.releases(conn, self.org_a, app, "alice", request,
+                                                  "GET", uuid.uuid4())[0], 404)
 
     def test_application_suspension_and_verified_resume(self):
         org, project, app, release = (uuid.uuid4() for _ in range(4))

@@ -18,4 +18,4 @@ An invitee sends `POST /v1/team/invitations/accept` with `{"token":"<token>"}` a
 
 Apply `007_team.sql` after prior migrations using the protected migration role. Its three `SECURITY DEFINER` functions are owned by that role; the migration owner must have permission to bypass the FORCE RLS membership table. Function execution is granted only to `hosting_api`, and direct membership INSERT/DELETE is not. On existing control volumes, apply the migration explicitly before starting the new API; Docker entrypoint migrations run only for a fresh database.
 
-The operator must protect invitation transport, the OIDC issuer and the API TLS gateway. Self-service owner transfer, identity-provider enrollment, MFA/step-up enforcement, service accounts, and email invitation delivery are outside this implemented path and remain production gates.
+The operator must protect invitation transport, the OIDC issuer and the API TLS gateway. Self-service owner transfer, identity-provider enrollment, MFA/step-up enforcement, and email invitation delivery remain production gates. Application service grants are described in [SERVICE_ACCOUNTS.md](SERVICE_ACCOUNTS.md).
