@@ -13,7 +13,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 from backup_health import evaluate
 from control_backup import backup, environment, verify
 from control_physical_backup import backup as physical_backup, verify as physical_verify
-from recovery_catalog import load_config, publish, inspect
+from recovery_catalog import load_config, publish, inspect, inspect_latest
 
 
 @unittest.skipUnless(os.environ.get("TEST_ADMIN_DSN") and os.environ.get("CONTROL_RUNTIME_BACKUP"),
@@ -77,6 +77,9 @@ class ControlBackupRuntime(unittest.TestCase):
                 self.assertEqual(inspected["state"], "CATALOG_INSPECTED")
                 self.assertEqual(inspected["entries"], 2)
                 self.assertEqual(inspected["sha256"], published["sha256"])
+                evidence.rename(root / "source-evidence-unavailable")
+                physical_evidence.rename(root / "source-physical-evidence-unavailable")
+                self.assertEqual(inspect_latest(catalog)["sha256"], published["sha256"])
                 wrong_repo = {**catalog, "classes": [{**catalog["classes"][0],
                     "repository": str(root / "missing-repository")}, catalog["classes"][1]]}
                 with self.assertRaisesRegex(RuntimeError, "provenance mismatch"):

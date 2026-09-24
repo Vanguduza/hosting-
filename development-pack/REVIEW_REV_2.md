@@ -44,7 +44,9 @@ encrypted control/client logical and physical PostgreSQL base backups and quiesc
 backups with isolated semantic restore probes and hourly freshness checks,
 an OpenBao Raft snapshot workflow with a disposable authority recovery probe
 and off-host repository freshness check,
-Docker isolation, and Traefik TLS routing
+an encrypted per-host DR catalog that checks declared versus live node
+inventory, protected restore receipts, remote snapshot tags and a separately
+restored catalog snapshot, Docker isolation, and Traefik TLS routing
 with a per-client rate limit. The CI hosts are ephemeral and are not a
 production estate. No production node, offsite backup target, provider
 integration, or live rootless builder has been certified. Build, runtime,
