@@ -89,16 +89,18 @@ class IngressRuntime(unittest.TestCase):
                                 self.assertEqual(response.status, 200)
                                 self.assertEqual(response.getheader("X-Dial-Release"), release)
                                 statuses = []
-                                for _ in range(8):
+                                for index in range(8):
                                     with socket.create_connection(("127.0.0.1", port), timeout=2) as peer:
                                         with context.wrap_socket(peer, server_hostname=host) as next_tls:
                                             next_tls.settimeout(2)
-                                            next_tls.sendall(f"GET /health HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n".encode())
+                                            next_tls.sendall((f"GET /health HTTP/1.1\r\nHost: {host}\r\n"
+                                                              f"X-Forwarded-For: 198.51.100.{index + 1}\r\n"
+                                                              "Connection: close\r\n\r\n").encode())
                                             next_response = http.client.HTTPResponse(next_tls)
                                             next_response.begin()
                                             next_response.read(1024)
                                             statuses.append(next_response.status)
-                                self.assertIn(429, statuses, "Traefik did not enforce the per-client rate limit")
+                                self.assertIn(429, statuses, "Client-controlled forwarding header bypassed rate limit")
                                 return
                     except (OSError, ssl.SSLError, http.client.HTTPException):
                         if time.monotonic() >= deadline:
