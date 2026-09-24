@@ -166,7 +166,7 @@ def backup(instance, evidence, node, helper):
         archive = Path(temp) / "valkey.tar"
         try:
             run(["docker", "stop", "--time", "30", owned["container"]], 50)
-            archive_volume(owned["volume"], helper, archive)
+            archive_volume(owned["volume"], helper, archive, read_non_root=True)
         finally:
             state = json.loads(run(["docker", "inspect", owned["container"]], 15))[0]["State"]
             if not state["Running"]:

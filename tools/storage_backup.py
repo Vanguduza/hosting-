@@ -128,11 +128,12 @@ def check_object(instance, ip, mounted, probe):
         raise RuntimeError("Storage semantic object differs")
 
 
-def archive_volume(volume, helper, archive):
+def archive_volume(volume, helper, archive, read_non_root=False):
     with open(archive, "xb") as out:
         os.chmod(archive, 0o600)
         run(["docker", "run", "--rm", "--network=none", "--read-only", "--user=0:0",
-             "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=64",
+             "--cap-drop=ALL", *(["--cap-add=DAC_OVERRIDE"] if read_non_root else []),
+             "--security-opt=no-new-privileges", "--pids-limit=64",
              "--memory=256m", "--cpus=0.5",
              "--mount", "type=volume,src=" + volume + ",dst=/source,readonly",
              helper, "tar", "-C", "/source", "-cf", "-", "."], 3600, stdout=out)
