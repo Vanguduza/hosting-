@@ -14,11 +14,10 @@ secrets=deploy/control/.secrets
 mkdir -m 700 "$secrets"
 for name in pg_admin pg_api pg_worker pg_admitter pg_hook pg_buildworker github_webhook; do
   openssl rand -hex 32 > "$secrets/$name"
-  chmod 600 "$secrets/$name"
+  # Compose bind-mounts local files without remapping uid/mode. The host
+  # directory is private; each container receives only its assigned files.
+  chmod 644 "$secrets/$name"
 done
-# Compose binds local files without remapping uid/mode. Serving containers
-# run as uid 10001; only their mounted role credentials belong to that uid.
-sudo chown 10001:10001 "$secrets/pg_api" "$secrets/pg_hook" "$secrets/github_webhook"
 compose=(docker compose -f deploy/control/compose.yaml)
 cleanup() {
   "${compose[@]}" down --volumes --remove-orphans || true

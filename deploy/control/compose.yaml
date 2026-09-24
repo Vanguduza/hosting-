@@ -20,9 +20,6 @@ services:
   migrate:
     build: ../../services/api
     command: [python, -m, hosting_api.migrate]
-    # Only this one-shot container receives the root-owned admin file. It
-    # retains no process after applying or rejecting the migration.
-    user: '0:0'
     environment:
       DB_HOST: db
       DB_NAME: hosting
