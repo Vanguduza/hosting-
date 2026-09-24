@@ -17,6 +17,7 @@ from node_agent.postgres import names, provision
 from node_agent.valkey import names as cache_names, provision as cache_provision
 sys.path.insert(0, str(ROOT / "tools"))
 from postgres_backup import backup, restore_drill, backup_all, configuration, run
+from postgres_physical_backup import backup as physical_backup, verify as physical_verify
 
 
 @unittest.skipUnless(os.environ.get("POSTGRES_RUNTIME_IMAGE"), "requires disposable Docker PostgreSQL image")
@@ -104,6 +105,14 @@ class PostgresRuntime(unittest.TestCase):
                         self.assertEqual(verified["state"], "RESTORE_VERIFIED")
                         self.assertEqual(verified["semantic_probe"], "durable_canary")
                         self.assertGreaterEqual(verified["restored_table_count"], 1)
+                        physical_evidence = Path(temp) / "physical-evidence"
+                        physical_evidence.mkdir(mode=0o700)
+                        physical = physical_backup(instance, physical_evidence)
+                        self.assertEqual(physical["state"], "BACKUP_CREATED")
+                        physical_result = physical_verify(instance, physical["snapshot_id"],
+                                                          physical_evidence, image)
+                        self.assertEqual(physical_result["state"], "RESTORE_VERIFIED")
+                        self.assertEqual(physical_result["semantic_probe"], "durable_canary")
                         fleet = backup_all(directory, image)
                         self.assertEqual(fleet["state"], "FLEET_BACKUP_VERIFIED")
                         self.assertEqual(fleet["instances"], 1)

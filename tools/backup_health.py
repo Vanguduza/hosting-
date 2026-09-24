@@ -11,6 +11,7 @@ from pathlib import Path
 
 KINDS = {
     "postgres": ("dial.postgres", "dial-pg-", "dial-pg-data-"),
+    "postgres-physical": ("dial.postgres", "dial-pg-", "dial-pg-data-"),
     "valkey": ("dial.valkey", "dial-vk-", "dial-vk-data-"),
     "storage": ("dial.storage", "dial-s3-", "dial-s3-data-"),
 }
@@ -110,6 +111,9 @@ def evaluate(kind, evidence, max_age_hours=36, min_instances=0, now=None, instan
                                    not HEX.fullmatch(row.get("probe_sha256", "")) or
                                    type(row.get("probe_version")) is not int or row["probe_version"] < 1):
             raise RuntimeError("OpenBao receipt lacks verified Raft provenance")
+        if kind == "postgres-physical" and (row.get("format") != "pg_basebackup_tar_wal_fetch" or
+                                            not HEX.fullmatch(row.get("probe_sha256", ""))):
+            raise RuntimeError("PostgreSQL physical backup provenance invalid")
         resource = kind if kind in ("control", "openbao") else row.get("instance_id")
         if kind in KINDS:
             try:

@@ -74,6 +74,25 @@ class ReceiptTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "lacks verified restore"):
                 evaluate("openbao", directory, now=now)
 
+    def test_physical_backup_health_requires_distinct_provenance(self):
+        now = datetime(2026, 9, 24, tzinfo=timezone.utc)
+        instance = str(uuid.uuid4())
+        with tempfile.TemporaryDirectory() as temporary:
+            evidence = Path(temporary) / "physical"
+            evidence.mkdir(mode=0o700)
+            row = {"instance_id": instance, "snapshot_id": "a" * 64, "archive_sha256": "b" * 64,
+                   "created_at": now.isoformat(), "restore_verified_at": now.isoformat(),
+                   "state": "RESTORE_VERIFIED"}
+            path = evidence / (row["snapshot_id"] + ".json")
+            path.write_text(json.dumps(row))
+            os.chmod(path, 0o600)
+            with self.assertRaisesRegex(RuntimeError, "physical backup provenance"):
+                evaluate("postgres-physical", evidence, instances={instance}, now=now)
+            row.update(format="pg_basebackup_tar_wal_fetch", probe_sha256="c" * 64)
+            path.write_text(json.dumps(row))
+            self.assertEqual(evaluate("postgres-physical", evidence, instances={instance}, now=now)["state"],
+                             "BACKUP_HEALTHY")
+
     def test_valkey_backup_offhost_and_probe_contract(self):
         instance = str(uuid.uuid4())
         with tempfile.TemporaryDirectory() as temporary:
