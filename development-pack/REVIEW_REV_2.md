@@ -39,6 +39,8 @@ Every stateful service has a distinct backup and recovery receipt. Placement is 
 
 Repository code, static tests, and disposable GitHub Actions jobs provide partial
 evidence for tenant scope, authentication boundaries, schema consistency,
+tenant-scoped verified audit readback and transactionally recorded capacity
+reservation intervals from a declared coverage epoch (not billable usage),
 PostgreSQL and Valkey resource lifecycles, development-only private Garage S3,
 encrypted control/client logical and physical PostgreSQL base backups and quiesced Valkey/Garage volume
 backups with isolated semantic restore probes and hourly freshness checks,
