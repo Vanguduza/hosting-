@@ -605,6 +605,9 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     jwks = environment()
+    from .migrate import verify
+    with psycopg.connect(database_dsn(), connect_timeout=5) as conn:
+        verify(conn)
     server = ThreadingHTTPServer(("0.0.0.0", 8080), Handler)
     server.jwks = jwks
     server.serve_forever()

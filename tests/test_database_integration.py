@@ -26,7 +26,7 @@ from hosting_api.github_webhook import Handler as HookHandler
 from hosting_api.github_webhook import enqueue, parse_push, verify
 from http.server import ThreadingHTTPServer
 from github_build_worker import claim as claim_build, finalize as finalize_build
-from hosting_api.migrate import apply as apply_migrations
+from hosting_api.migrate import apply as apply_migrations, verify as verify_migrations
 import admit_image
 from unittest.mock import patch
 
@@ -41,6 +41,7 @@ class DatabaseIntegration(unittest.TestCase):
         with psycopg.connect(cls.admin) as conn:
             assert apply_migrations(conn) == len(list((ROOT / "services/api/schema").glob("*.sql")))
             assert apply_migrations(conn) == 0
+            verify_migrations(conn)
             cls.org_a, cls.org_b = uuid.uuid4(), uuid.uuid4()
             cls.project_a, cls.project_b = uuid.uuid4(), uuid.uuid4()
             cls.node = uuid.uuid4()
@@ -64,8 +65,17 @@ class DatabaseIntegration(unittest.TestCase):
             with psycopg.connect(self.admin, autocommit=True) as conn:
                 with self.assertRaisesRegex(RuntimeError, "history differs"):
                     apply_migrations(conn, destination)
+                with self.assertRaisesRegex(RuntimeError, "differs from service image"):
+                    verify_migrations(conn, destination)
                 self.assertEqual(conn.execute("SELECT count(*) FROM hosting.schema_migrations").fetchone()[0],
                                  len(list(destination.glob("*.sql"))))
+
+        for dsn in (self.api, self.worker, os.environ["TEST_HOOK_DSN"],
+                    os.environ["TEST_BUILDWORKER_DSN"]):
+            with psycopg.connect(dsn) as conn:
+                verify_migrations(conn)
+                with self.assertRaises(psycopg.errors.InsufficientPrivilege):
+                    conn.execute("DELETE FROM hosting.schema_migrations")
 
     def test_rls_and_durable_release(self):
         handler = Handler.__new__(Handler)

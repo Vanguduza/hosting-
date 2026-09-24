@@ -102,6 +102,8 @@ def main():
     with psycopg.connect(dsn, connect_timeout=5) as conn:
         if conn.execute("SELECT current_user").fetchone()[0] != "hosting_hook":
             raise RuntimeError("The webhook receiver requires the restricted hook role")
+        from .migrate import verify
+        verify(conn)
     server = ThreadingHTTPServer(("0.0.0.0", 8081), Handler)
     server.secret, server.dsn = secret, dsn
     server.serve_forever()

@@ -59,6 +59,17 @@ def apply(conn, directory=SCHEMA):
         return len(scripts) - len(installed)
 
 
+def verify(conn, directory=SCHEMA):
+    """Refuse to serve when the database history differs from this image."""
+    expected = [entry[:3] for entry in files(directory)]
+    with conn.transaction():
+        installed = conn.execute(
+            "SELECT version,filename,sha256 FROM hosting.schema_migrations ORDER BY version"
+        ).fetchall()
+        if installed != expected:
+            raise RuntimeError("Control schema differs from service image; run the protected migrator")
+
+
 def main():
     if os.environ.get("DB_USER") in SERVICE_ROLES:
         raise RuntimeError("Serving credentials cannot run schema migrations")

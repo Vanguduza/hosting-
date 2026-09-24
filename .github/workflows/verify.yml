@@ -5,6 +5,11 @@ on:
 permissions:
   contents: read
 jobs:
+  compose-startup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash tests/compose_startup.sh
   contracts:
     runs-on: ubuntu-latest
     steps:

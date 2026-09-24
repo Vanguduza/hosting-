@@ -399,6 +399,9 @@ def main():
     for file in certificate.values():
         if not os.path.isfile(file):
             raise RuntimeError("Worker certificate file unavailable")
+    from .migrate import verify
+    with psycopg.connect(database_dsn(), connect_timeout=5) as conn:
+        verify(conn)
     while True:
         try:
             with psycopg.connect(database_dsn(), row_factory=dict_row, connect_timeout=5, autocommit=True) as conn:

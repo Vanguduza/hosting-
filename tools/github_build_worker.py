@@ -12,6 +12,9 @@ from pathlib import Path
 import psycopg
 from psycopg.rows import dict_row
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "services/api"))
+from hosting_api.migrate import verify as verify_schema
+
 
 def run(args, *, timeout=300, cwd=None):
     process = subprocess.run(args, cwd=cwd, capture_output=True, text=True, timeout=timeout,
@@ -136,6 +139,7 @@ def main():
     with psycopg.connect(os.environ["HOSTING_BUILD_DSN"], connect_timeout=5) as conn:
         if conn.execute("SELECT current_user").fetchone()[0] != "hosting_buildworker":
             raise RuntimeError("Builder requires the restricted buildworker role")
+        verify_schema(conn)
     while True:
         try:
             with psycopg.connect(os.environ["HOSTING_BUILD_DSN"], row_factory=dict_row,
