@@ -493,6 +493,18 @@ class Handler(BaseHTTPRequestHandler):
                      "checked_at": health["checked_at"] if health else None,
                      "consecutive_failures": health["consecutive_failures"] if health else 0}
 
+    def health_incidents(self, conn, org_id, app_id, actor, method):
+        if method != "GET" or not allowed(self.membership(conn, org_id, actor), "release:read"):
+            return 404, {"error": "not_found"}
+        if not conn.execute("SELECT 1 FROM hosting.applications WHERE organization_id=%s AND id=%s",
+                            (org_id, app_id)).fetchone():
+            return 404, {"error": "not_found"}
+        rows = conn.execute("SELECT id,release_id,opened_at,closed_at,resolution "
+                            "FROM hosting.release_health_incidents WHERE organization_id=%s "
+                            "AND application_id=%s ORDER BY opened_at DESC,id DESC LIMIT 100",
+                            (org_id, app_id)).fetchall()
+        return 200, {"incidents": rows}
+
     def releases(self, conn, org_id, app_id, actor, body, method, request_id, rollback_of=None):
         role = self.membership(conn, org_id, actor)
         service_client = conn.execute("SELECT current_setting('hosting.service_client_id',true) AS client_id").fetchone()["client_id"]
@@ -919,6 +931,9 @@ class Handler(BaseHTTPRequestHandler):
                     elif match := re.fullmatch(r"/v1/organizations/([0-9a-f-]{36})/applications/([0-9a-f-]{36})/health", path):
                         result = self.health(conn, uuid.UUID(match.group(1)), uuid.UUID(match.group(2)),
                                              actor, method)
+                    elif match := re.fullmatch(r"/v1/organizations/([0-9a-f-]{36})/applications/([0-9a-f-]{36})/health/incidents", path):
+                        result = self.health_incidents(conn, uuid.UUID(match.group(1)), uuid.UUID(match.group(2)),
+                                                       actor, method)
                     elif match := re.fullmatch(r"/v1/organizations/([0-9a-f-]{36})/applications/([0-9a-f-]{36})/releases", path):
                         result = self.releases(conn, uuid.UUID(match.group(1)), uuid.UUID(match.group(2)),
                                                actor, body, method, request_id)

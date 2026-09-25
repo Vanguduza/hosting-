@@ -269,6 +269,12 @@ def finalize_traffic(conn, row, token, error=None):
             "WHERE id=%s AND traffic_state=%s AND traffic_lease_token=%s RETURNING id",
             (target, state, target, row["application_id"], state, token)).fetchone()
         if changed and state != "SUSPENDED":
+            if target == "SUSPENDED":
+                conn.execute("UPDATE hosting.release_health_incidents SET closed_at=now(),resolution='SUSPENDED' "
+                             "WHERE release_id=%s AND closed_at IS NULL", (row["active_release_id"],))
+                conn.execute("UPDATE hosting.release_health SET state='UNKNOWN',consecutive_failures=0,"
+                             "checked_at=NULL,next_probe_at=now(),lease_token=NULL,lease_until=NULL "
+                             "WHERE release_id=%s", (row["active_release_id"],))
             conn.execute("SELECT set_config('hosting.actor_sub',%s,true)", (row["traffic_requested_by"],))
             record(conn, row["organization_id"], row["traffic_requested_by"],
                    "application." + target.lower(), row["application_id"], uuid.uuid4())
@@ -404,6 +410,10 @@ def finalize(conn, job, release, attempt, receipt=None, failure=None):
             conn.execute("UPDATE hosting.applications SET active_release_id=%s WHERE id=%s",
                          (release["id"], release["application_id"]))
             conn.execute("UPDATE hosting.releases SET state='SERVING' WHERE id=%s", (release["id"],))
+            if release["previous_release_id"]:
+                conn.execute("UPDATE hosting.release_health_incidents SET closed_at=now(),"
+                             "resolution='SUPERSEDED' WHERE release_id=%s AND closed_at IS NULL",
+                             (release["previous_release_id"],))
             conn.execute("INSERT INTO hosting.release_health(release_id,organization_id,application_id) "
                          "VALUES (%s,%s,%s) ON CONFLICT (release_id) DO UPDATE "
                          "SET state='UNKNOWN',consecutive_failures=0,checked_at=NULL,next_probe_at=now(),"
@@ -493,6 +503,14 @@ def finalize_health(conn, row, token, healthy):
         action = ("release.health_down" if state == "DOWN" and current["state"] != "DOWN" else
                   "release.health_recovered" if healthy and current["state"] == "DOWN" else None)
         if action:
+            if action == "release.health_down":
+                conn.execute("INSERT INTO hosting.release_health_incidents "
+                             "(organization_id,application_id,release_id) VALUES (%s,%s,%s)",
+                             (row["organization_id"], row["application_id"], row["release_id"]))
+            else:
+                conn.execute("UPDATE hosting.release_health_incidents SET closed_at=now(),"
+                             "resolution='RECOVERED' WHERE release_id=%s AND closed_at IS NULL",
+                             (row["release_id"],))
             record(conn, row["organization_id"], "service:dial-health-worker", action,
                    row["release_id"], uuid.uuid4())
         return True

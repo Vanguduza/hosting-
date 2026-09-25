@@ -210,6 +210,12 @@ def document():
                  "consecutive_failures": INT},
                 ("state", "release_id", "checked_at", "consecutive_failures")),
             description="The current serving release is checked every minute. Observations older than three minutes are UNKNOWN; suspended traffic has its own state.")},
+        app + "/health/incidents": {"get": operation("listReleaseHealthIncidents", "Read recent public outage episodes", 200,
+            obj({"incidents": array(obj({"id": UUID, "release_id": UUID, "opened_at": DATE,
+                "closed_at": {"type": ["string", "null"], "format": "date-time"},
+                "resolution": {"enum": ["RECOVERED", "SUSPENDED", "SUPERSEDED", None]}},
+                ("id", "release_id", "opened_at", "closed_at", "resolution")))}, ("incidents",)),
+            description="Up to 100 most recent third-failure episodes. An open episode does not override a stale UNKNOWN observation.")},
         app + "/releases": {
             "get": operation("listReleases", "Read release history", 200,
                 obj({"releases": array(obj({"id": UUID, "image": STRING, "state": STRING,
