@@ -1,6 +1,7 @@
 """Runs against disposable PostgreSQL in CI; skipped without TEST_ADMIN_DSN."""
 import os
 import shutil
+import subprocess
 import hashlib
 import hmac
 import http.client
@@ -35,6 +36,7 @@ from replay_event import replay as replay_event
 from event_health import status as event_health_status
 from set_quota import set_quota
 from quota_health import inspect as inspect_quota_health
+from audit_checkpoint import config_file as checkpoint_config, publish as publish_checkpoint, inspect_snapshot
 import admit_image
 from unittest.mock import patch
 
@@ -84,6 +86,51 @@ class DatabaseIntegration(unittest.TestCase):
                 verify_migrations(conn)
                 with self.assertRaises(psycopg.errors.InsufficientPrivilege):
                     conn.execute("DELETE FROM hosting.schema_migrations")
+
+    def test_offhost_audit_checkpoint_detects_privileged_history_rewrite(self):
+        org = uuid.uuid4()
+        with psycopg.connect(self.admin, row_factory=dict_row) as conn:
+            conn.execute("INSERT INTO hosting.organizations(id,name) VALUES (%s,'anchor-test')", (org,))
+            record(conn, org, "ci-anchor", "anchor.first", uuid.uuid4(), uuid.uuid4())
+            record(conn, org, "ci-anchor", "anchor.second", uuid.uuid4(), uuid.uuid4())
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo, password, key, config_path = (root / name for name in
+                                                ("repository", "password", "key", "config.json"))
+            password.write_text("independent-test-restic-password")
+            key.write_bytes(os.urandom(32))
+            for path in (password, key):
+                path.chmod(0o600)
+            config_path.write_text(json.dumps({
+                "version": 1, "anchor_id": "ci-audit", "source_failure_domain": "primary",
+                "recovery_failure_domain": "recovery", "repository": str(repo),
+                "password_file": str(password), "signing_key_file": str(key),
+            }))
+            config_path.chmod(0o600)
+            config, signing_key = checkpoint_config(config_path, allow_local=True)
+            subprocess.run(["restic", "init"], check=True, capture_output=True,
+                           env={**os.environ, "RESTIC_REPOSITORY": str(repo),
+                                "RESTIC_PASSWORD_FILE": str(password)})
+            with psycopg.connect(self.admin, row_factory=dict_row, autocommit=True) as conn:
+                receipt = publish_checkpoint(conn, config, signing_key)
+                self.assertEqual(inspect_snapshot(conn, config, signing_key, receipt["snapshot_id"])
+                                 ["state"], "AUDIT_HISTORY_VERIFIED")
+                with conn.transaction():
+                    record(conn, org, "ci-anchor", "anchor.after_snapshot", uuid.uuid4(), uuid.uuid4())
+                self.assertEqual(inspect_snapshot(conn, config, signing_key, receipt["snapshot_id"])
+                                 ["state"], "AUDIT_HISTORY_VERIFIED")
+                with self.assertRaisesRegex(RuntimeError, "signature invalid"):
+                    inspect_snapshot(conn, config, b"wrong-signing-key-contents" * 2, receipt["snapshot_id"])
+                before = conn.execute("SELECT id,created_at FROM hosting.audit_events "
+                                      "WHERE organization_id=%s ORDER BY id LIMIT 1", (org,)).fetchone()
+                try:
+                    conn.execute("UPDATE hosting.audit_events SET created_at=created_at+interval '1 second' "
+                                 "WHERE id=%s", (before["id"],))
+                    with self.assertRaisesRegex(RuntimeError, "differs from off-host checkpoint"):
+                        inspect_snapshot(conn, config, signing_key, receipt["snapshot_id"])
+                finally:
+                    conn.execute("UPDATE hosting.audit_events SET created_at=%s WHERE id=%s",
+                                 (before["created_at"], before["id"]))
 
     def test_failed_migration_rolls_back_schema_and_history(self):
         with tempfile.TemporaryDirectory() as temporary:
