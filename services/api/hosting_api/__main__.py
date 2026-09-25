@@ -471,6 +471,28 @@ class Handler(BaseHTTPRequestHandler):
         ).fetchall()
         return 200, {"builds": rows}
 
+    def health(self, conn, org_id, app_id, actor, method):
+        if method != "GET" or not allowed(self.membership(conn, org_id, actor), "release:read"):
+            return 404, {"error": "not_found"}
+        app = conn.execute("SELECT active_release_id,traffic_state FROM hosting.applications "
+                           "WHERE organization_id=%s AND id=%s", (org_id, app_id)).fetchone()
+        if not app:
+            return 404, {"error": "not_found"}
+        if not app["active_release_id"]:
+            return 200, {"state": "NOT_DEPLOYED", "release_id": None, "checked_at": None,
+                         "consecutive_failures": 0}
+        if app["traffic_state"] != "ACTIVE":
+            return 200, {"state": app["traffic_state"], "release_id": app["active_release_id"],
+                         "checked_at": None, "consecutive_failures": 0}
+        health = conn.execute("SELECT state,consecutive_failures,checked_at,"
+                              "(checked_at IS NULL OR checked_at<now()-interval '3 minutes') AS stale "
+                              "FROM hosting.release_health WHERE organization_id=%s AND application_id=%s "
+                              "AND release_id=%s", (org_id, app_id, app["active_release_id"])).fetchone()
+        return 200, {"state": "UNKNOWN" if not health or health["stale"] else health["state"],
+                     "release_id": app["active_release_id"],
+                     "checked_at": health["checked_at"] if health else None,
+                     "consecutive_failures": health["consecutive_failures"] if health else 0}
+
     def releases(self, conn, org_id, app_id, actor, body, method, request_id, rollback_of=None):
         role = self.membership(conn, org_id, actor)
         service_client = conn.execute("SELECT current_setting('hosting.service_client_id',true) AS client_id").fetchone()["client_id"]
@@ -893,6 +915,9 @@ class Handler(BaseHTTPRequestHandler):
                                               actor, body, method, request_id)
                     elif match := re.fullmatch(r"/v1/organizations/([0-9a-f-]{36})/applications/([0-9a-f-]{36})/builds", path):
                         result = self.builds(conn, uuid.UUID(match.group(1)), uuid.UUID(match.group(2)),
+                                             actor, method)
+                    elif match := re.fullmatch(r"/v1/organizations/([0-9a-f-]{36})/applications/([0-9a-f-]{36})/health", path):
+                        result = self.health(conn, uuid.UUID(match.group(1)), uuid.UUID(match.group(2)),
                                              actor, method)
                     elif match := re.fullmatch(r"/v1/organizations/([0-9a-f-]{36})/applications/([0-9a-f-]{36})/releases", path):
                         result = self.releases(conn, uuid.UUID(match.group(1)), uuid.UUID(match.group(2)),

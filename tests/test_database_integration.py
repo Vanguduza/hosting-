@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "services/api"))
 sys.path.insert(0, str(ROOT / "tools"))
 from hosting_api.__main__ import Handler, record, audit_after, capacity_window
-from hosting_api.worker import claim, finalize, sweep_retirements, sweep_failed, process_traffic_once
+from hosting_api.worker import claim, finalize, sweep_retirements, sweep_failed, process_traffic_once, claim_health, finalize_health, process_health_once
 from hosting_api.postgres_jobs import claim as claim_postgres, finalize as finalize_postgres
 from hosting_api.valkey_jobs import claim as claim_valkey, finalize as finalize_valkey
 from hosting_api.storage_jobs import claim as claim_storage, finalize as finalize_storage
@@ -136,15 +136,88 @@ class DatabaseIntegration(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             destination = Path(temporary) / "schema"
             shutil.copytree(ROOT / "services/api/schema", destination)
-            (destination / "022_rollback_probe.sql").write_text(
+            (destination / "023_rollback_probe.sql").write_text(
                 "CREATE TABLE hosting.rollback_probe(id integer);\n"
                 "SELECT 1 / 0;\n", encoding="utf-8")
             with psycopg.connect(self.admin, autocommit=True) as conn:
                 with self.assertRaises(psycopg.errors.DivisionByZero):
                     apply_migrations(conn, destination)
                 self.assertIsNone(conn.execute("SELECT to_regclass('hosting.rollback_probe')").fetchone()[0])
-                self.assertEqual(conn.execute("SELECT count(*) FROM hosting.schema_migrations").fetchone()[0], 21)
+                self.assertEqual(conn.execute("SELECT count(*) FROM hosting.schema_migrations").fetchone()[0], 22)
                 verify_migrations(conn)
+
+    def test_continuous_release_health_is_fenced_and_tenant_scoped(self):
+        org, project, app, release = (uuid.uuid4() for _ in range(4))
+        actor, viewer = "health-owner-" + org.hex, "health-viewer-" + org.hex
+        with psycopg.connect(self.admin) as conn:
+            conn.execute("INSERT INTO hosting.organizations(id,name) VALUES (%s,'health-test')", (org,))
+            conn.execute("INSERT INTO hosting.memberships(organization_id,actor_sub,role) "
+                         "VALUES (%s,%s,'owner'),(%s,%s,'viewer')", (org, actor, org, viewer))
+            conn.execute("INSERT INTO hosting.projects(id,organization_id,name) VALUES (%s,%s,'health')", (project, org))
+            conn.execute("INSERT INTO hosting.applications(id,organization_id,project_id,environment,name) "
+                         "VALUES (%s,%s,%s,'production','health')", (app, org, project))
+            conn.execute("INSERT INTO hosting.releases(id,organization_id,application_id,node_id,requested_by,"
+                         "idempotency_key,image,port,health_path,memory_mb,cpu_milli,state) "
+                         "VALUES (%s,%s,%s,%s,%s,%s,%s,8080,'/health',128,100,'SERVING')",
+                         (release, org, app, self.node, actor, uuid.uuid4(), self.image))
+            conn.execute("UPDATE hosting.applications SET active_release_id=%s WHERE id=%s", (release, app))
+            conn.execute("INSERT INTO hosting.release_health(release_id,organization_id,application_id) "
+                         "VALUES (%s,%s,%s)", (release, org, app))
+            conn.execute("INSERT INTO hosting.domains(organization_id,application_id,hostname,verification_token,verified_at) "
+                         "VALUES (%s,%s,%s,%s,now())", (org, app, org.hex + '.example.org', 'x' * 43))
+        handler = Handler.__new__(Handler)
+        with psycopg.connect(self.api, row_factory=dict_row) as conn:
+            with conn.transaction():
+                conn.execute("SELECT set_config('hosting.actor_sub',%s,true)", (viewer,))
+                self.assertEqual(handler.health(conn, org, app, viewer, 'GET')[1]['state'], 'UNKNOWN')
+                self.assertEqual(handler.health(conn, self.org_b, app, viewer, 'GET')[0], 404)
+                self.assertEqual(conn.execute("SELECT count(*) FROM hosting.release_health").fetchone()['count'], 1)
+            with conn.transaction():
+                conn.execute("SELECT set_config('hosting.actor_sub','bob',true)")
+                self.assertEqual(conn.execute("SELECT count(*) FROM hosting.release_health").fetchone()['count'], 0)
+        with psycopg.connect(self.worker, row_factory=dict_row, autocommit=True) as conn:
+            first, token = claim_health(conn)
+            self.assertEqual(first['release_id'], release)
+            with psycopg.connect(self.admin) as admin:
+                admin.execute("UPDATE hosting.release_health SET lease_until=now()-interval '1 second' "
+                              "WHERE release_id=%s", (release,))
+            replacement, newer_token = claim_health(conn)
+            self.assertNotEqual(token, newer_token)
+            self.assertFalse(finalize_health(conn, first, token, True))
+            self.assertTrue(finalize_health(conn, replacement, newer_token, False))
+            for _ in range(2):
+                with psycopg.connect(self.admin) as admin:
+                    admin.execute("UPDATE hosting.release_health SET next_probe_at=now() WHERE release_id=%s", (release,))
+                row, token = claim_health(conn)
+                self.assertTrue(finalize_health(conn, row, token, False))
+            with psycopg.connect(self.admin) as admin:
+                admin.execute("UPDATE hosting.release_health SET next_probe_at=now() WHERE release_id=%s", (release,))
+            with patch('hosting_api.worker.address_proves', return_value=True), \
+                    patch('hosting_api.worker.public_probe', return_value=True) as public:
+                self.assertTrue(process_health_once(conn))
+                self.assertEqual(public.call_count, 1)
+                host, address, probed_release, path = public.call_args.args
+                self.assertEqual((host, str(address), probed_release, path),
+                                 (org.hex + '.example.org', '8.8.8.8', release, '/health'))
+            self.assertFalse(process_health_once(conn))
+        with psycopg.connect(self.admin, row_factory=dict_row) as conn:
+            states = conn.execute("SELECT action FROM hosting.audit_events WHERE organization_id=%s ORDER BY id", (org,)).fetchall()
+            self.assertEqual([row['action'] for row in states], ['release.health_down', 'release.health_recovered'])
+            conn.execute("UPDATE hosting.release_health SET checked_at=now()-interval '4 minutes' WHERE release_id=%s",
+                         (release,))
+        with psycopg.connect(self.api, row_factory=dict_row) as conn:
+            with conn.transaction():
+                conn.execute("SELECT set_config('hosting.actor_sub',%s,true)", (actor,))
+                self.assertEqual(handler.health(conn, org, app, actor, 'GET')[1]['state'], 'UNKNOWN')
+        with psycopg.connect(self.admin) as conn:
+            conn.execute("UPDATE hosting.applications SET traffic_state='SUSPENDED' WHERE id=%s", (app,))
+            conn.execute("UPDATE hosting.release_health SET next_probe_at=now() WHERE release_id=%s", (release,))
+        with psycopg.connect(self.worker, row_factory=dict_row, autocommit=True) as conn:
+            self.assertIsNone(claim_health(conn))
+        with psycopg.connect(self.api, row_factory=dict_row) as conn:
+            with conn.transaction():
+                conn.execute("SELECT set_config('hosting.actor_sub',%s,true)", (actor,))
+                self.assertEqual(handler.health(conn, org, app, actor, 'GET')[1]['state'], 'SUSPENDED')
 
     def test_committed_audit_delivery_is_ordered_and_fenced(self):
         org = uuid.uuid4()

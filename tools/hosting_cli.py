@@ -96,7 +96,7 @@ def parser():
         "resume": ("org", "app", "reason"),
         "domain": ("org", "app"), "domain-register": ("org", "app", "hostname"),
         "domain-verify": ("org", "app"), "builds": ("org", "app"),
-        "releases": ("org", "app"), "release-queue": ("org", "app", "image", "port",
+        "releases": ("org", "app"), "health": ("org", "app"), "release-queue": ("org", "app", "image", "port",
                                                      "health_path", "memory_mb", "cpu_milli"),
         "rollback": ("org", "app", "target_release_id"),
         "postgres": ("org", "app"), "postgres-create": ("org", "app", "memory_mb", "cpu_milli"),
@@ -178,7 +178,7 @@ def request_for(args):
         return app + ("/domain/verify" if name == "domain-verify" else "/domain"), \
             ({"hostname": args.hostname} if name == "domain-register" else
              {} if name == "domain-verify" else None), None
-    if name in ("builds", "releases", "postgres", "valkey", "storage"):
+    if name in ("builds", "releases", "health", "postgres", "valkey", "storage"):
         return app + "/" + name, None, None
     if name == "release-queue":
         key = args.idempotency_key or str(uuid.uuid4())

@@ -1,0 +1,9 @@
+# Public release health observations
+
+The deployment worker adds a health row when it promotes a release to `SERVING`. Migration 022 also creates rows for releases that were serving when it was applied. The worker polls only the **current** serving release of an application whose traffic is `ACTIVE`. Each probe verifies that every public A record points to the registered ingress IPv4 address, connects to that address with the hostname's trusted HTTPS certificate, and requires a 2xx response with the exact `X-Dial-Release` header on the release's configured health path.
+
+The worker stores one observation per minute. A successful probe reports `UP`; one or two consecutive failures report `DEGRADED`; three or more report `DOWN`. A transition to `DOWN` emits `release.health_down` in the tenant audit chain and event outbox. A subsequent successful probe emits `release.health_recovered`. A crash or lost lease cannot finalize a stale observation, and a probe finishing after release replacement or traffic suspension is discarded. The next poll is due immediately after traffic resumes.
+
+`GET /v1/organizations/{organization_id}/applications/{application_id}/health` exposes the active release, observation time, consecutive failures, and state to tenant members with release read access. An observation older than three minutes reports `UNKNOWN` even if its last persisted state was `UP` or `DOWN`. `NOT_DEPLOYED` and the traffic transition states are distinct from public probe outcomes. `python3 tools/hosting_cli.py --base-url https://control.example:443 --token-file /private/control.jwt health ORG_ID APP_ID` reads the same data.
+
+These probes run from the control worker's network location and share its failure domain. They do not constitute an independent public status page, multi-region uptime check, application dependency test, or automatic rollback. An operator must arrange independent monitoring and incident delivery before production qualification.

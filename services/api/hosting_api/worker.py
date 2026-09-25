@@ -404,6 +404,11 @@ def finalize(conn, job, release, attempt, receipt=None, failure=None):
             conn.execute("UPDATE hosting.applications SET active_release_id=%s WHERE id=%s",
                          (release["id"], release["application_id"]))
             conn.execute("UPDATE hosting.releases SET state='SERVING' WHERE id=%s", (release["id"],))
+            conn.execute("INSERT INTO hosting.release_health(release_id,organization_id,application_id) "
+                         "VALUES (%s,%s,%s) ON CONFLICT (release_id) DO UPDATE "
+                         "SET state='UNKNOWN',consecutive_failures=0,checked_at=NULL,next_probe_at=now(),"
+                         "lease_token=NULL,lease_until=NULL",
+                         (release["id"], release["organization_id"], release["application_id"]))
             conn.execute("UPDATE hosting.jobs SET state='COMPLETE',lease_until=NULL,receipt=%s::jsonb WHERE id=%s",
                          (json.dumps(receipt), job["id"]))
             if release["previous_release_id"]:
@@ -444,6 +449,72 @@ def recover_expired(conn):
                    row["release_id"], uuid.uuid4())
 
 
+def claim_health(conn):
+    with conn.transaction():
+        row = conn.execute(
+            "SELECT h.release_id,h.organization_id,h.application_id,h.state,h.consecutive_failures,"
+            "r.health_path,d.hostname,d.verified_at,n.public_ipv4 FROM hosting.release_health h "
+            "JOIN hosting.applications a ON a.id=h.application_id AND a.active_release_id=h.release_id "
+            "JOIN hosting.releases r ON r.id=h.release_id AND r.state='SERVING' "
+            "LEFT JOIN hosting.domains d ON d.application_id=a.id "
+            "LEFT JOIN hosting.nodes n ON n.id=r.node_id "
+            "WHERE a.traffic_state='ACTIVE' AND h.next_probe_at<=now() "
+            "AND (h.lease_until IS NULL OR h.lease_until<now()) "
+            "ORDER BY h.next_probe_at,h.release_id FOR UPDATE OF h SKIP LOCKED LIMIT 1"
+        ).fetchone()
+        if not row:
+            return None
+        token = uuid.uuid4()
+        conn.execute("UPDATE hosting.release_health SET lease_token=%s,"
+                     "lease_until=now()+interval '30 seconds' WHERE release_id=%s",
+                     (token, row["release_id"]))
+        return row, token
+
+
+def finalize_health(conn, row, token, healthy):
+    with conn.transaction():
+        # The active release and traffic state may change while the network probe runs.
+        conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,1))", (str(row["application_id"]),))
+        current = conn.execute(
+            "SELECT h.state,h.consecutive_failures FROM hosting.release_health h "
+            "JOIN hosting.applications a ON a.id=h.application_id AND a.active_release_id=h.release_id "
+            "JOIN hosting.releases r ON r.id=h.release_id AND r.state='SERVING' "
+            "WHERE h.release_id=%s AND h.lease_token=%s AND h.lease_until>now() "
+            "AND a.traffic_state='ACTIVE' FOR UPDATE OF h",
+            (row["release_id"], token)).fetchone()
+        if not current:
+            return False
+        failures = 0 if healthy else current["consecutive_failures"] + 1
+        state = "UP" if healthy else "DOWN" if failures >= 3 else "DEGRADED"
+        conn.execute("UPDATE hosting.release_health SET state=%s,consecutive_failures=%s,"
+                     "checked_at=now(),next_probe_at=now()+interval '1 minute',"
+                     "lease_token=NULL,lease_until=NULL WHERE release_id=%s",
+                     (state, failures, row["release_id"]))
+        action = ("release.health_down" if state == "DOWN" and current["state"] != "DOWN" else
+                  "release.health_recovered" if healthy and current["state"] == "DOWN" else None)
+        if action:
+            record(conn, row["organization_id"], "service:dial-health-worker", action,
+                   row["release_id"], uuid.uuid4())
+        return True
+
+
+def process_health_once(conn):
+    claimed = claim_health(conn)
+    if not claimed:
+        return False
+    row, token = claimed
+    healthy = False
+    try:
+        if (row["hostname"] and row["verified_at"] and row["public_ipv4"] and
+                address_proves(row["hostname"], row["public_ipv4"])):
+            healthy = public_probe(row["hostname"], row["public_ipv4"],
+                                   row["release_id"], row["health_path"])
+    except (OSError, ssl.SSLError, http.client.HTTPException, ValueError):
+        pass
+    finalize_health(conn, row, token, healthy)
+    return True
+
+
 def process_once(conn, certificate):
     # Public containment takes priority over slow node probes and provisioning.
     if process_traffic_once(conn, certificate):
@@ -463,7 +534,7 @@ def process_once(conn, certificate):
     recover_expired(conn)
     claimed = claim(conn)
     if not claimed:
-        return False
+        return process_health_once(conn)
     job, release, node, attempt = claimed
     if not node or not node["enabled"]:
         error = "Assigned node disabled or absent"
