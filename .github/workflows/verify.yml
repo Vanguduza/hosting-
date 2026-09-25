@@ -25,6 +25,7 @@ jobs:
       - run: python -m pip wheel --no-deps ./sdk/python --wheel-dir /tmp/dial-sdk-wheel
       - run: python -m compileall -q services/api agents/node-agent tools sdk/python
       - run: sh -n deploy/control/install-audit-checkpoint.sh
+      - run: sh -n deploy/control/install-release-health-check.sh
       - run: python -c 'import sys; sys.path.insert(0,"services/api"); import hosting_api.__main__'
       - run: docker compose -f deploy/control/compose.yaml -f deploy/control/worker.compose.yaml config --quiet
         env:
