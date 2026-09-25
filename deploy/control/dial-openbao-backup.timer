@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily DIAL encrypted OpenBao Raft snapshot
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=yes
+Unit=dial-openbao-backup.service
+
+[Install]
+WantedBy=timers.target

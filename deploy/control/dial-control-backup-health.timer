@@ -1,0 +1,10 @@
+[Unit]
+Description=Hourly DIAL control database backup freshness check
+
+[Timer]
+OnCalendar=hourly
+Persistent=yes
+Unit=dial-control-backup-health.service
+
+[Install]
+WantedBy=timers.target

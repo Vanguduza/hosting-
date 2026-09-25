@@ -1,0 +1,10 @@
+[Unit]
+Description=DIAL control PostgreSQL physical backup freshness
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/dial-hosting/control-physical-backup.env
+ExecStart=/usr/bin/python3 /opt/dial-hosting/backup_health.py control-physical ${BACKUP_EVIDENCE_DIR} --max-age-hours 36 --min-instances 1 --check-remote
+NoNewPrivileges=yes
+UMask=0077

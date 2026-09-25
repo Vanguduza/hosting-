@@ -1,0 +1,14 @@
+[Unit]
+Description=DIAL Valkey encrypted backup and isolated semantic restore verification
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/dial-hosting/valkey-backup.env
+ExecStart=/usr/bin/python3 /opt/dial-hosting/valkey_backup.py backup-all
+TimeoutStartSec=6h
+NoNewPrivileges=yes
+UMask=0077

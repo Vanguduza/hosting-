@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily DIAL Valkey encrypted backup and restore drill
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=yes
+Unit=dial-valkey-backup.service
+
+[Install]
+WantedBy=timers.target

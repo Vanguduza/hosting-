@@ -1,0 +1,12 @@
+[Unit]
+Description=DIAL %i backup restore evidence freshness
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/dial-hosting/%i-backup.env
+ExecStart=/usr/bin/python3 /opt/dial-hosting/backup_health.py %i ${BACKUP_EVIDENCE_DIR} --max-age-hours 36 --min-instances 1 --check-remote
+NoNewPrivileges=yes
+UMask=0077

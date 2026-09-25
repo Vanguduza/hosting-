@@ -1,0 +1,10 @@
+[Unit]
+Description=Hourly DIAL PostgreSQL physical backup health
+
+[Timer]
+OnCalendar=hourly
+Persistent=yes
+Unit=dial-postgres-physical-backup-health.service
+
+[Install]
+WantedBy=timers.target
