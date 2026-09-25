@@ -9,9 +9,28 @@ import ipaddress
 from urllib.parse import urlsplit
 
 import psycopg
+from psycopg.rows import dict_row
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "services", "api")))
 from hosting_api.worker import node_capacity, private_endpoint
+
+
+def register(conn, endpoint, server_name, public_ipv4, capacity):
+    """Return the same node on a matching retry without duplicating inventory."""
+    with conn.transaction():
+        conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,2))", (endpoint,))
+        existing = conn.execute("SELECT id,server_name,public_ipv4 FROM hosting.nodes "
+                                "WHERE endpoint=%s FOR UPDATE", (endpoint,)).fetchone()
+        if existing:
+            if existing["server_name"] != server_name or str(existing["public_ipv4"]) != public_ipv4:
+                raise ValueError("Existing node enrollment has a different identity")
+            return existing["id"], True
+        node_id = uuid.uuid4()
+        conn.execute("INSERT INTO hosting.nodes(id,endpoint,server_name,public_ipv4,enabled,"
+                     "cpu_milli,memory_mb,observed_at) VALUES (%s,%s,%s,%s,true,%s,%s,now())",
+                     (node_id, endpoint, server_name, public_ipv4,
+                      capacity["cpu_milli"], capacity["memory_mb"]))
+        return node_id, False
 
 
 def main():
@@ -34,13 +53,12 @@ def main():
         parser.error("HOSTING_MIGRATION_DSN required")
     node = {"endpoint": args.endpoint, "server_name": parsed.hostname}
     capacity = node_capacity(node, {"ca": args.ca_file, "cert": args.cert_file, "key": args.key_file})
-    node_id = uuid.uuid4()
-    with psycopg.connect(dsn, connect_timeout=5) as conn:
-        conn.execute("INSERT INTO hosting.nodes(id,endpoint,server_name,public_ipv4,enabled,cpu_milli,memory_mb,observed_at) "
-                     "VALUES (%s,%s,%s,%s,true,%s,%s,now())",
-                     (node_id, args.endpoint, parsed.hostname, args.public_ipv4,
-                      capacity["cpu_milli"], capacity["memory_mb"]))
-    print(json.dumps({"node_id": str(node_id), "capacity": capacity}))
+    try:
+        with psycopg.connect(dsn, row_factory=dict_row, connect_timeout=5) as conn:
+            node_id, replayed = register(conn, args.endpoint, parsed.hostname, args.public_ipv4, capacity)
+    except (ValueError, psycopg.errors.UniqueViolation):
+        parser.error("Node identity already enrolled with a conflicting endpoint or address")
+    print(json.dumps({"node_id": str(node_id), "capacity": capacity, "replayed": replayed}))
 
 
 if __name__ == "__main__":

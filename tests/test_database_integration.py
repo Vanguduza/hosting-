@@ -36,6 +36,7 @@ from replay_event import replay as replay_event
 from event_health import status as event_health_status
 from set_quota import set_quota
 from quota_health import inspect as inspect_quota_health
+from register_node import register as register_node
 from release_health_check import status as release_health_status
 from audit_checkpoint import config_file as checkpoint_config, publish as publish_checkpoint, inspect_snapshot, check_latest
 import admit_image
@@ -144,15 +145,39 @@ class DatabaseIntegration(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             destination = Path(temporary) / "schema"
             shutil.copytree(ROOT / "services/api/schema", destination)
-            (destination / "024_rollback_probe.sql").write_text(
+            (destination / "025_rollback_probe.sql").write_text(
                 "CREATE TABLE hosting.rollback_probe(id integer);\n"
                 "SELECT 1 / 0;\n", encoding="utf-8")
             with psycopg.connect(self.admin, autocommit=True) as conn:
                 with self.assertRaises(psycopg.errors.DivisionByZero):
                     apply_migrations(conn, destination)
                 self.assertIsNone(conn.execute("SELECT to_regclass('hosting.rollback_probe')").fetchone()[0])
-                self.assertEqual(conn.execute("SELECT count(*) FROM hosting.schema_migrations").fetchone()[0], 23)
+                self.assertEqual(conn.execute("SELECT count(*) FROM hosting.schema_migrations").fetchone()[0], 24)
                 verify_migrations(conn)
+
+    def test_node_enrollment_retry_cannot_duplicate_capacity_or_ingress(self):
+        endpoint = 'https://10.0.0.40:8443'
+        capacity = {'cpu_milli': 500, 'memory_mb': 1024}
+        with psycopg.connect(self.admin, row_factory=dict_row, autocommit=True) as conn:
+            node_id, replayed = register_node(conn, endpoint, '10.0.0.40', '9.9.9.9', capacity)
+            self.assertFalse(replayed)
+            same_id, replayed = register_node(conn, endpoint, '10.0.0.40', '9.9.9.9', capacity)
+            self.assertTrue(replayed)
+            self.assertEqual(node_id, same_id)
+            with self.assertRaisesRegex(ValueError, 'different identity'):
+                register_node(conn, endpoint, '10.0.0.40', '9.9.9.10', capacity)
+            with self.assertRaises(psycopg.errors.UniqueViolation):
+                register_node(conn, 'https://10.0.0.41:8443', '10.0.0.41', '9.9.9.9', capacity)
+            with self.assertRaises(psycopg.errors.UniqueViolation):
+                conn.execute('INSERT INTO hosting.nodes(endpoint,server_name,public_ipv4,enabled,'
+                             'cpu_milli,memory_mb,observed_at) '
+                             'VALUES (%s,%s,%s,true,500,1024,now())',
+                             (endpoint, '10.0.0.40', '9.9.9.11'))
+            with self.assertRaises(psycopg.errors.CheckViolation):
+                conn.execute('UPDATE hosting.nodes SET public_ipv4=%s WHERE id=%s',
+                             ('9.9.9.9/24', node_id))
+            self.assertEqual(conn.execute('SELECT count(*) FROM hosting.nodes WHERE endpoint=%s',
+                                          (endpoint,)).fetchone()['count'], 1)
 
     def test_continuous_release_health_is_fenced_and_tenant_scoped(self):
         org, project, app, release = (uuid.uuid4() for _ in range(4))
