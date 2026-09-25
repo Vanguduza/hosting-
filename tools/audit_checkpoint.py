@@ -7,7 +7,7 @@ import json
 import os
 import sys
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import psycopg
@@ -146,7 +146,38 @@ def inspect_snapshot(conn, config, key, snapshot_id):
             if tenant_chain(conn, org, expected["last_id"]) != expected:
                 raise RuntimeError("Database audit history differs from off-host checkpoint")
     return {"snapshot_id": snapshot_id, "tenants_verified": len(document["tenants"]),
-            "state": "AUDIT_HISTORY_VERIFIED"}
+            "created_at": document["created_at"], "state": "AUDIT_HISTORY_VERIFIED"}
+
+
+def check_latest(conn, config, key, max_age_hours=36, now=None):
+    if type(max_age_hours) is not int or not 1 <= max_age_hours <= 168:
+        raise ValueError("Invalid audit checkpoint freshness policy")
+    require_global_reader(conn)
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        raise ValueError("Checkpoint check requires timezone-aware time")
+    with restic_env(config["repository"], config["password_file"]):
+        matches = [row for row in snapshots().values()
+                   if {"dial-audit-anchor", "anchor=" + config["anchor_id"]}.issubset(
+                       set(row["tags"]))]
+    if not matches:
+        return {"healthy": False, "snapshot_id": None, "age_seconds": None,
+                "max_age_hours": max_age_hours, "state": "MISSING"}
+    def timestamp(row):
+        value = datetime.fromisoformat(row["time"])
+        if value.tzinfo is None:
+            raise RuntimeError("Restic checkpoint timestamp lacks timezone")
+        return value
+    newest = max(matches, key=timestamp)
+    verified = inspect_snapshot(conn, config, key, newest["id"])
+    signed = datetime.fromisoformat(verified["created_at"])
+    if signed.tzinfo is None:
+        raise RuntimeError("Signed checkpoint timestamp lacks timezone")
+    age = now - signed
+    healthy = timedelta(0) <= age <= timedelta(hours=max_age_hours)
+    return {"healthy": healthy, "snapshot_id": newest["id"],
+            "age_seconds": int(age.total_seconds()), "max_age_hours": max_age_hours,
+            "state": verified["state"] if healthy else "STALE"}
 
 
 def main():
@@ -156,13 +187,18 @@ def main():
     commands.add_parser("publish")
     inspect = commands.add_parser("inspect")
     inspect.add_argument("snapshot_id")
+    check = commands.add_parser("check-latest")
+    check.add_argument("--max-age-hours", type=int, default=36)
     args = parser.parse_args()
     config, key = config_file(args.config)
     with psycopg.connect(database_dsn(), row_factory=dict_row, autocommit=True, connect_timeout=5) as conn:
         verify_schema(conn)
         result = (publish(conn, config, key) if args.command == "publish" else
-                  inspect_snapshot(conn, config, key, args.snapshot_id))
+                  inspect_snapshot(conn, config, key, args.snapshot_id) if args.command == "inspect" else
+                  check_latest(conn, config, key, args.max_age_hours))
     print(json.dumps(result, sort_keys=True))
+    if args.command == "check-latest" and not result["healthy"]:
+        raise SystemExit(2)
 
 
 if __name__ == "__main__":

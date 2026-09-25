@@ -37,7 +37,7 @@ from event_health import status as event_health_status
 from set_quota import set_quota
 from quota_health import inspect as inspect_quota_health
 from release_health_check import status as release_health_status
-from audit_checkpoint import config_file as checkpoint_config, publish as publish_checkpoint, inspect_snapshot
+from audit_checkpoint import config_file as checkpoint_config, publish as publish_checkpoint, inspect_snapshot, check_latest
 import admit_image
 from unittest.mock import patch
 
@@ -116,6 +116,13 @@ class DatabaseIntegration(unittest.TestCase):
                 receipt = publish_checkpoint(conn, config, signing_key)
                 self.assertEqual(inspect_snapshot(conn, config, signing_key, receipt["snapshot_id"])
                                  ["state"], "AUDIT_HISTORY_VERIFIED")
+                self.assertEqual(check_latest(conn, config, signing_key)["state"], "AUDIT_HISTORY_VERIFIED")
+                with patch("audit_checkpoint.snapshots", return_value={}):
+                    self.assertEqual(check_latest(conn, config, signing_key)["state"], "MISSING")
+                old = datetime.fromisoformat(receipt["created_at"]) + timedelta(hours=49)
+                self.assertEqual(check_latest(conn, config, signing_key, now=old)["state"], "STALE")
+                with self.assertRaisesRegex(RuntimeError, "signature invalid"):
+                    check_latest(conn, config, b"wrong-signing-key-contents" * 2)
                 with conn.transaction():
                     record(conn, org, "ci-anchor", "anchor.after_snapshot", uuid.uuid4(), uuid.uuid4())
                 self.assertEqual(inspect_snapshot(conn, config, signing_key, receipt["snapshot_id"])
