@@ -34,6 +34,7 @@ from hosting_api.event_worker import claim as claim_event, finalize as finalize_
 from replay_event import replay as replay_event
 from event_health import status as event_health_status
 from set_quota import set_quota
+from quota_health import inspect as inspect_quota_health
 import admit_image
 from unittest.mock import patch
 
@@ -88,14 +89,14 @@ class DatabaseIntegration(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             destination = Path(temporary) / "schema"
             shutil.copytree(ROOT / "services/api/schema", destination)
-            (destination / "021_rollback_probe.sql").write_text(
+            (destination / "022_rollback_probe.sql").write_text(
                 "CREATE TABLE hosting.rollback_probe(id integer);\n"
                 "SELECT 1 / 0;\n", encoding="utf-8")
             with psycopg.connect(self.admin, autocommit=True) as conn:
                 with self.assertRaises(psycopg.errors.DivisionByZero):
                     apply_migrations(conn, destination)
                 self.assertIsNone(conn.execute("SELECT to_regclass('hosting.rollback_probe')").fetchone()[0])
-                self.assertEqual(conn.execute("SELECT count(*) FROM hosting.schema_migrations").fetchone()[0], 20)
+                self.assertEqual(conn.execute("SELECT count(*) FROM hosting.schema_migrations").fetchone()[0], 21)
                 verify_migrations(conn)
 
     def test_committed_audit_delivery_is_ordered_and_fenced(self):
@@ -221,6 +222,9 @@ class DatabaseIntegration(unittest.TestCase):
             self.assertEqual(conn.execute(
                 "SELECT count(*) FROM hosting.capacity_intervals WHERE organization_id=%s",
                 (org,)).fetchone()["count"], 1)
+            with self.assertRaisesRegex(psycopg.errors.RaiseException, "Quota deletion prohibited"):
+                with conn.transaction():
+                    conn.execute("DELETE FROM hosting.organization_quotas WHERE organization_id=%s", (org,))
             with self.assertRaisesRegex(psycopg.errors.RaiseException,
                                         "Quota below existing reservations"):
                 set_quota(conn, org, 99, 256, "ci-operator", "Attempt to lower below reservation")
@@ -228,6 +232,10 @@ class DatabaseIntegration(unittest.TestCase):
             self.assertEqual(conn.execute(
                 "SELECT count(*) FROM hosting.quota_changes WHERE organization_id=%s",
                 (org,)).fetchone()["count"], 1)
+            health = inspect_quota_health(conn)
+            self.assertIn(str(self.org_b), health["unbounded"])
+            self.assertNotIn(str(org), health["unbounded"])
+            self.assertEqual(health["over_limit"], [])
         with psycopg.connect(self.api, row_factory=dict_row) as conn:
             with conn.transaction():
                 conn.execute("SELECT set_config('hosting.actor_sub',%s,true)", (actor,))
