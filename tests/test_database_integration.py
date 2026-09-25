@@ -36,6 +36,7 @@ from replay_event import replay as replay_event
 from event_health import status as event_health_status
 from set_quota import set_quota
 from quota_health import inspect as inspect_quota_health
+from release_health_check import status as release_health_status
 from audit_checkpoint import config_file as checkpoint_config, publish as publish_checkpoint, inspect_snapshot
 import admit_image
 from unittest.mock import patch
@@ -190,6 +191,8 @@ class DatabaseIntegration(unittest.TestCase):
                     admin.execute("UPDATE hosting.release_health SET next_probe_at=now() WHERE release_id=%s", (release,))
                 row, token = claim_health(conn)
                 self.assertTrue(finalize_health(conn, row, token, False))
+            self.assertIn(str(app), [item['application_id'] for item in
+                          release_health_status(conn, min_applications=1)['unavailable']])
             with psycopg.connect(self.admin) as admin:
                 admin.execute("UPDATE hosting.release_health SET next_probe_at=now() WHERE release_id=%s", (release,))
             with patch('hosting_api.worker.address_proves', return_value=True), \
@@ -200,6 +203,10 @@ class DatabaseIntegration(unittest.TestCase):
                 self.assertEqual((host, str(address), probed_release, path),
                                  (org.hex + '.example.org', '8.8.8.8', release, '/health'))
             self.assertFalse(process_health_once(conn))
+            observed = release_health_status(conn, min_applications=1)
+            self.assertNotIn(str(app), [item['application_id'] for category in
+                             ('missing','stale','unavailable','degraded','inconsistent')
+                             for item in observed[category]])
         with psycopg.connect(self.admin, row_factory=dict_row) as conn:
             states = conn.execute("SELECT action FROM hosting.audit_events WHERE organization_id=%s ORDER BY id", (org,)).fetchall()
             self.assertEqual([row['action'] for row in states], ['release.health_down', 'release.health_recovered'])
@@ -216,12 +223,17 @@ class DatabaseIntegration(unittest.TestCase):
                 self.assertEqual(handler.health_incidents(conn, org, app, actor, 'GET')[1]['incidents'][0]
                                  ['resolution'], 'RECOVERED')
                 self.assertEqual(handler.health_incidents(conn, self.org_b, app, actor, 'GET')[0], 404)
+        with psycopg.connect(self.worker, row_factory=dict_row) as conn:
+            self.assertIn(str(app), [item['application_id'] for item in
+                          release_health_status(conn, min_applications=1)['stale']])
         with psycopg.connect(self.worker, row_factory=dict_row, autocommit=True) as conn:
             for _ in range(3):
                 with psycopg.connect(self.admin) as admin:
                     admin.execute("UPDATE hosting.release_health SET next_probe_at=now() WHERE release_id=%s", (release,))
                 row, token = claim_health(conn)
                 self.assertTrue(finalize_health(conn, row, token, False))
+            with self.assertRaises(ValueError):
+                release_health_status(conn, max_age_seconds=0)
         with psycopg.connect(self.admin) as conn:
             traffic_token = uuid.uuid4()
             conn.execute("UPDATE hosting.applications SET traffic_state='SUSPENDING',"
