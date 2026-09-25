@@ -1,0 +1,10 @@
+[Unit]
+Description=Hourly DIAL off-host audit checkpoint verification
+
+[Timer]
+OnCalendar=*-*-* *:45:00 UTC
+Persistent=yes
+Unit=dial-audit-checkpoint-health.service
+
+[Install]
+WantedBy=timers.target

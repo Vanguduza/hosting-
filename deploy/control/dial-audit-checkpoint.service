@@ -1,0 +1,18 @@
+[Unit]
+Description=DIAL off-host audit checkpoint publication
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/dial-hosting/audit-checkpoint.env
+Environment=RESTIC_CACHE_DIR=/var/cache/dial-hosting/audit-checkpoint
+ExecStart=/opt/dial-hosting/audit-checkpoint/venv/bin/python /opt/dial-hosting/audit-checkpoint/tools/audit_checkpoint.py --config /etc/dial-hosting/audit-checkpoint.json publish
+TimeoutStartSec=2h
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/cache/dial-hosting/audit-checkpoint
+UMask=0077
