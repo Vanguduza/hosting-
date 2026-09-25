@@ -214,6 +214,16 @@ class DatabaseIntegration(unittest.TestCase):
                                     "WHERE release_id=%s", (release,)).fetchone()
             self.assertIsNotNone(incident['closed_at'])
             self.assertEqual(incident['resolution'], 'RECOVERED')
+            conn.execute("UPDATE hosting.releases SET state='SUPERSEDED' WHERE id=%s", (release,))
+        with psycopg.connect(self.api, row_factory=dict_row) as conn:
+            with conn.transaction():
+                conn.execute("SELECT set_config('hosting.actor_sub',%s,true)", (actor,))
+                self.assertEqual(handler.health(conn, org, app, actor, 'GET')[1]['state'], 'UNKNOWN')
+        with psycopg.connect(self.worker, row_factory=dict_row) as conn:
+            self.assertIn(str(app), [item['application_id'] for item in
+                          release_health_status(conn, min_applications=1)['inconsistent']])
+        with psycopg.connect(self.admin) as conn:
+            conn.execute("UPDATE hosting.releases SET state='SERVING' WHERE id=%s", (release,))
             conn.execute("UPDATE hosting.release_health SET checked_at=now()-interval '4 minutes' WHERE release_id=%s",
                          (release,))
         with psycopg.connect(self.api, row_factory=dict_row) as conn:

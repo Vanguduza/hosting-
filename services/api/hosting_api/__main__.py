@@ -474,8 +474,10 @@ class Handler(BaseHTTPRequestHandler):
     def health(self, conn, org_id, app_id, actor, method):
         if method != "GET" or not allowed(self.membership(conn, org_id, actor), "release:read"):
             return 404, {"error": "not_found"}
-        app = conn.execute("SELECT active_release_id,traffic_state FROM hosting.applications "
-                           "WHERE organization_id=%s AND id=%s", (org_id, app_id)).fetchone()
+        app = conn.execute("SELECT a.active_release_id,a.traffic_state,r.state AS release_state "
+                           "FROM hosting.applications a LEFT JOIN hosting.releases r "
+                           "ON r.id=a.active_release_id WHERE a.organization_id=%s AND a.id=%s",
+                           (org_id, app_id)).fetchone()
         if not app:
             return 404, {"error": "not_found"}
         if not app["active_release_id"]:
@@ -483,6 +485,9 @@ class Handler(BaseHTTPRequestHandler):
                          "consecutive_failures": 0}
         if app["traffic_state"] != "ACTIVE":
             return 200, {"state": app["traffic_state"], "release_id": app["active_release_id"],
+                         "checked_at": None, "consecutive_failures": 0}
+        if app["release_state"] != "SERVING":
+            return 200, {"state": "UNKNOWN", "release_id": app["active_release_id"],
                          "checked_at": None, "consecutive_failures": 0}
         health = conn.execute("SELECT state,consecutive_failures,checked_at,"
                               "(checked_at IS NULL OR checked_at<now()-interval '3 minutes') AS stale "
