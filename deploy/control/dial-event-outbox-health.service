@@ -1,0 +1,16 @@
+[Unit]
+Description=DIAL committed event outbox delivery health
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/dial-hosting/release-health-check.env
+ExecStart=/opt/dial-hosting/release-health-check/venv/bin/python /opt/dial-hosting/release-health-check/tools/event_health.py --max-age-seconds ${EVENT_MAX_AGE_SECONDS} --max-pending ${EVENT_MAX_PENDING}
+TimeoutStartSec=1min
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+UMask=0077
