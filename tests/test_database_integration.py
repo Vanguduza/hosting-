@@ -37,6 +37,7 @@ from event_health import status as event_health_status
 from set_quota import set_quota
 from quota_health import inspect as inspect_quota_health
 from register_node import register as register_node
+from node_health_check import status as node_health_status
 from release_health_check import status as release_health_status
 from audit_checkpoint import config_file as checkpoint_config, publish as publish_checkpoint, inspect_snapshot, check_latest
 import admit_image
@@ -160,24 +161,50 @@ class DatabaseIntegration(unittest.TestCase):
         capacity = {'cpu_milli': 500, 'memory_mb': 1024}
         with psycopg.connect(self.admin, row_factory=dict_row, autocommit=True) as conn:
             node_id, replayed = register_node(conn, endpoint, '10.0.0.40', '9.9.9.9', capacity)
-            self.assertFalse(replayed)
-            same_id, replayed = register_node(conn, endpoint, '10.0.0.40', '9.9.9.9', capacity)
-            self.assertTrue(replayed)
-            self.assertEqual(node_id, same_id)
-            with self.assertRaisesRegex(ValueError, 'different identity'):
-                register_node(conn, endpoint, '10.0.0.40', '9.9.9.10', capacity)
-            with self.assertRaises(psycopg.errors.UniqueViolation):
-                register_node(conn, 'https://10.0.0.41:8443', '10.0.0.41', '9.9.9.9', capacity)
-            with self.assertRaises(psycopg.errors.UniqueViolation):
-                conn.execute('INSERT INTO hosting.nodes(endpoint,server_name,public_ipv4,enabled,'
-                             'cpu_milli,memory_mb,observed_at) '
-                             'VALUES (%s,%s,%s,true,500,1024,now())',
-                             (endpoint, '10.0.0.40', '9.9.9.11'))
-            with self.assertRaises(psycopg.errors.CheckViolation):
-                conn.execute('UPDATE hosting.nodes SET public_ipv4=%s WHERE id=%s',
-                             ('9.9.9.9/24', node_id))
-            self.assertEqual(conn.execute('SELECT count(*) FROM hosting.nodes WHERE endpoint=%s',
-                                          (endpoint,)).fetchone()['count'], 1)
+            try:
+                self.assertFalse(replayed)
+                same_id, replayed = register_node(conn, endpoint, '10.0.0.40', '9.9.9.9', capacity)
+                self.assertTrue(replayed)
+                self.assertEqual(node_id, same_id)
+                with self.assertRaisesRegex(ValueError, 'different identity'):
+                    register_node(conn, endpoint, '10.0.0.40', '9.9.9.10', capacity)
+                with self.assertRaises(psycopg.errors.UniqueViolation):
+                    register_node(conn, 'https://10.0.0.41:8443', '10.0.0.41', '9.9.9.9', capacity)
+                with self.assertRaises(psycopg.errors.UniqueViolation):
+                    conn.execute('INSERT INTO hosting.nodes(endpoint,server_name,public_ipv4,enabled,'
+                                 'cpu_milli,memory_mb,observed_at) '
+                                 'VALUES (%s,%s,%s,true,500,1024,now())',
+                                 (endpoint, '10.0.0.40', '9.9.9.11'))
+                with self.assertRaises(psycopg.errors.CheckViolation):
+                    conn.execute('UPDATE hosting.nodes SET public_ipv4=%s WHERE id=%s',
+                                 ('9.9.9.9/24', node_id))
+                self.assertEqual(conn.execute('SELECT count(*) FROM hosting.nodes WHERE endpoint=%s',
+                                              (endpoint,)).fetchone()['count'], 1)
+            finally:
+                conn.execute('DELETE FROM hosting.nodes WHERE id=%s', (node_id,))
+
+    def test_node_inventory_health_rejects_stale_missing_and_future_evidence(self):
+        with psycopg.connect(self.admin, autocommit=True) as admin, \
+                psycopg.connect(self.worker, row_factory=dict_row) as worker:
+            original = admin.execute('SELECT observed_at,public_ipv4 FROM hosting.nodes WHERE id=%s',
+                                     (self.node,)).fetchone()
+            try:
+                admin.execute('UPDATE hosting.nodes SET observed_at=now(),public_ipv4=%s WHERE id=%s',
+                              ('8.8.8.8', self.node))
+                self.assertNotIn(str(self.node), node_health_status(worker)['stale'])
+                self.assertFalse(node_health_status(worker, min_nodes=100)['healthy'])
+                admin.execute("UPDATE hosting.nodes SET observed_at=now()-interval '10 minutes' WHERE id=%s",
+                              (self.node,))
+                self.assertIn(str(self.node), node_health_status(worker)['stale'])
+                admin.execute("UPDATE hosting.nodes SET observed_at=now()+interval '10 minutes' WHERE id=%s",
+                              (self.node,))
+                self.assertIn(str(self.node), node_health_status(worker)['future'])
+                admin.execute('UPDATE hosting.nodes SET observed_at=now(),public_ipv4=NULL WHERE id=%s',
+                              (self.node,))
+                self.assertIn(str(self.node), node_health_status(worker)['missing_ingress'])
+            finally:
+                admin.execute('UPDATE hosting.nodes SET observed_at=%s,public_ipv4=%s WHERE id=%s',
+                              (original[0], original[1], self.node))
 
     def test_continuous_release_health_is_fenced_and_tenant_scoped(self):
         org, project, app, release = (uuid.uuid4() for _ in range(4))

@@ -1,0 +1,7 @@
+# Runtime node inventory health
+
+The worker refreshes registered node CPU and memory observations over private mTLS roughly once per minute. The scheduler refuses stale observations when admitting new resources. `tools/node_health_check.py --max-age-seconds 300 --min-nodes N` reads enabled nodes through the restricted `hosting_worker` database role. It returns JSON with remaining CPU and memory reservations, nodes whose observations are older than the threshold, nodes reporting future timestamps, nodes missing a public IPv4 ingress, and disabled nodes that still have assigned releases or data resources. It exits 2 if the expected enabled-node count is absent or any of those conditions occurs.
+
+The operator monitoring package in `deploy/control/install-release-health-check.sh` installs a minute-by-minute `dial-node-health-check.timer` alongside release-health monitoring. Configure `MIN_ENABLED_NODES` and `NODE_MAX_AGE_SECONDS` in the root-owned `/etc/dial-hosting/release-health-check.env` for the selected estate. Supervise failed service results from an independent alert receiver. Disabled nodes are excluded by design; a zero enabled-node inventory fails the default minimum of one.
+
+A recent capacity observation does not prove workloads are healthy or that the host has enough disk and IOPS. Public release health and backup freshness are separate evidence. Node enrollment rejects duplicate private endpoints and public ingress IPv4 addresses; an identity change must be reviewed rather than replayed as a new node.

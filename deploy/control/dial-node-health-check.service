@@ -1,0 +1,16 @@
+[Unit]
+Description=DIAL runtime node observation freshness
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/dial-hosting/release-health-check.env
+ExecStart=/opt/dial-hosting/release-health-check/venv/bin/python /opt/dial-hosting/release-health-check/tools/node_health_check.py --max-age-seconds ${NODE_MAX_AGE_SECONDS} --min-nodes ${MIN_ENABLED_NODES}
+TimeoutStartSec=1min
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+UMask=0077
