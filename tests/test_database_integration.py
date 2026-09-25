@@ -37,6 +37,7 @@ from event_health import status as event_health_status
 from set_quota import set_quota
 from quota_health import inspect as inspect_quota_health
 from register_node import register as register_node
+from set_node_state import set_state as set_node_state
 from node_health_check import status as node_health_status
 from release_health_check import status as release_health_status
 from audit_checkpoint import config_file as checkpoint_config, publish as publish_checkpoint, inspect_snapshot, check_latest
@@ -146,14 +147,14 @@ class DatabaseIntegration(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             destination = Path(temporary) / "schema"
             shutil.copytree(ROOT / "services/api/schema", destination)
-            (destination / "025_rollback_probe.sql").write_text(
+            (destination / "026_rollback_probe.sql").write_text(
                 "CREATE TABLE hosting.rollback_probe(id integer);\n"
                 "SELECT 1 / 0;\n", encoding="utf-8")
             with psycopg.connect(self.admin, autocommit=True) as conn:
                 with self.assertRaises(psycopg.errors.DivisionByZero):
                     apply_migrations(conn, destination)
                 self.assertIsNone(conn.execute("SELECT to_regclass('hosting.rollback_probe')").fetchone()[0])
-                self.assertEqual(conn.execute("SELECT count(*) FROM hosting.schema_migrations").fetchone()[0], 24)
+                self.assertEqual(conn.execute("SELECT count(*) FROM hosting.schema_migrations").fetchone()[0], 25)
                 verify_migrations(conn)
 
     def test_node_enrollment_retry_cannot_duplicate_capacity_or_ingress(self):
@@ -181,6 +182,46 @@ class DatabaseIntegration(unittest.TestCase):
                 self.assertEqual(conn.execute('SELECT count(*) FROM hosting.nodes WHERE endpoint=%s',
                                               (endpoint,)).fetchone()['count'], 1)
             finally:
+                conn.execute('DELETE FROM hosting.nodes WHERE id=%s', (node_id,))
+
+    def test_node_retirement_requires_empty_inventory_and_live_reenrollment(self):
+        node_id = uuid.uuid4()
+        with psycopg.connect(self.admin, row_factory=dict_row, autocommit=True) as conn:
+            conn.execute("INSERT INTO hosting.nodes(id,endpoint,server_name,public_ipv4,enabled,"
+                         "cpu_milli,memory_mb,observed_at) "
+                         "VALUES (%s,'https://10.0.0.49:8443','10.0.0.49','9.9.9.49',"
+                         "true,500,1024,now())", (node_id,))
+            try:
+                conn.execute("UPDATE hosting.nodes SET reserved_cpu_milli=100 WHERE id=%s", (node_id,))
+                with self.assertRaisesRegex(ValueError, 'assigned workloads or reservations'):
+                    set_node_state(conn, node_id, False, 'operator-ci', 'maintenance window')
+                self.assertEqual(conn.execute('SELECT count(*) FROM hosting.node_state_changes '
+                                              'WHERE node_id=%s', (node_id,)).fetchone()['count'], 0)
+                conn.execute("UPDATE hosting.nodes SET reserved_cpu_milli=0 WHERE id=%s", (node_id,))
+                self.assertTrue(set_node_state(conn, node_id, False, 'operator-ci', 'maintenance window'))
+                self.assertFalse(set_node_state(conn, node_id, False, 'operator-ci', 'retry'))
+                with self.assertRaisesRegex(ValueError, 'certificate required'):
+                    set_node_state(conn, node_id, True, 'operator-ci', 'maintenance done')
+                with patch('set_node_state.node_capacity', return_value={
+                        'cpu_milli': 600, 'memory_mb': 1200}) as live:
+                    self.assertTrue(set_node_state(conn, node_id, True, 'operator-ci',
+                                                   'maintenance done', {'ca': 'ca', 'cert': 'cert', 'key': 'key'}))
+                    live.assert_called_once()
+                row = conn.execute('SELECT enabled,cpu_milli,memory_mb FROM hosting.nodes '
+                                   'WHERE id=%s', (node_id,)).fetchone()
+                self.assertEqual((row['enabled'], row['cpu_milli'], row['memory_mb']),
+                                 (True, 600, 1200))
+                changes = conn.execute('SELECT enabled,operator FROM hosting.node_state_changes '
+                                       'WHERE node_id=%s ORDER BY id', (node_id,)).fetchall()
+                self.assertEqual([(r['enabled'], r['operator']) for r in changes],
+                                 [(False, 'operator-ci'), (True, 'operator-ci')])
+                with psycopg.connect(self.worker) as worker:
+                    with self.assertRaises(psycopg.errors.InsufficientPrivilege):
+                        worker.execute('INSERT INTO hosting.node_state_changes '
+                                       '(node_id,enabled,operator,reason) VALUES (%s,false,%s,%s)',
+                                       (node_id, 'worker', 'not authorized'))
+            finally:
+                conn.execute('DELETE FROM hosting.node_state_changes WHERE node_id=%s', (node_id,))
                 conn.execute('DELETE FROM hosting.nodes WHERE id=%s', (node_id,))
 
     def test_node_inventory_health_rejects_stale_missing_and_future_evidence(self):
