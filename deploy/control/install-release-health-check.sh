@@ -33,6 +33,7 @@ python3 -m venv "$target/venv"
 install -o root -g root -m 0755 "$repo_root/tools/release_health_check.py" "$target/tools/"
 install -o root -g root -m 0755 "$repo_root/tools/node_health_check.py" "$target/tools/"
 install -o root -g root -m 0755 "$repo_root/tools/event_health.py" "$target/tools/"
+install -o root -g root -m 0755 "$repo_root/tools/external_public_health.py" "$target/tools/"
 for source in "$repo_root"/services/api/hosting_api/*.py; do
   install -o root -g root -m 0644 "$source" "$target/services/api/hosting_api/"
 done
@@ -41,11 +42,13 @@ for source in "$repo_root"/services/api/schema/*.sql; do
 done
 for unit in dial-release-health-check.service dial-release-health-check.timer \
             dial-node-health-check.service dial-node-health-check.timer \
-            dial-event-outbox-health.service dial-event-outbox-health.timer; do
+            dial-event-outbox-health.service dial-event-outbox-health.timer \
+            dial-external-public-health.service dial-external-public-health.timer; do
   install -o root -g root -m 0644 "$script_dir/$unit" /etc/systemd/system/
 done
 systemctl daemon-reload
 systemctl enable --now dial-release-health-check.timer dial-node-health-check.timer \
   dial-event-outbox-health.timer
+systemctl enable --now dial-external-public-health.timer
 systemctl --no-pager list-timers dial-release-health-check.timer dial-node-health-check.timer \
-  dial-event-outbox-health.timer
+  dial-event-outbox-health.timer dial-external-public-health.timer
