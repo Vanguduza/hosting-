@@ -19,7 +19,7 @@ from control_backup import backup, environment, verify
 from control_physical_backup import backup as physical_backup, verify as physical_verify
 from control_wal import archive as wal_archive, materialize as wal_materialize, pitr, system_id
 from control_wal import publish_evidence, recover_evidence
-from recovery_catalog import load_config, publish, inspect, inspect_latest
+from recovery_catalog import load_config, publish, inspect, inspect_latest, recover_receipts
 
 
 @unittest.skipUnless(os.environ.get("TEST_ADMIN_DSN") and os.environ.get("CONTROL_RUNTIME_BACKUP"),
@@ -157,6 +157,13 @@ class ControlBackupRuntime(unittest.TestCase):
                 evidence.rename(root / "source-evidence-unavailable")
                 physical_evidence.rename(root / "source-physical-evidence-unavailable")
                 self.assertEqual(inspect_latest(catalog)["sha256"], published["sha256"])
+                recovered_receipts = root / "recovered-receipts"
+                recovered_receipts.mkdir(mode=0o700)
+                self.assertEqual(recover_receipts(catalog, published["snapshot_id"],
+                    recovered_receipts)["receipts"], 2)
+                self.assertEqual(physical_verify(recovered_receipts / "control-physical" /
+                    "control-physical", physical["snapshot_id"],
+                    os.environ["CONTROL_POSTGRES_IMAGE"])["state"], "RESTORE_VERIFIED")
                 wrong_repo = {**catalog, "classes": [{**catalog["classes"][0],
                     "repository": str(root / "missing-repository")}, catalog["classes"][1]]}
                 with self.assertRaisesRegex(RuntimeError, "provenance mismatch"):

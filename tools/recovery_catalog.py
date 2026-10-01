@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import uuid
@@ -150,7 +151,7 @@ def publish(config, output_dir):
             output_dir.stat().st_mode & 0o077:
         raise RuntimeError("Catalog output directory must be owner-only")
     entries = backup_entries(config)
-    document = {"version": 1, "catalog_id": config["catalog_id"], "host_id": config["host_id"],
+    document = {"version": 2, "catalog_id": config["catalog_id"], "host_id": config["host_id"],
                 "failure_domain": config["failure_domain"],
                 "intended_recovery_failure_domain": config["recovery_failure_domain"],
                 "created_at": datetime.now(timezone.utc).isoformat(), "entries": entries}
@@ -161,15 +162,30 @@ def publish(config, output_dir):
         file.flush()
         os.fsync(file.fileno())
     try:
-        with restic_env(config["catalog_repository"], config["catalog_password_file"]):
-            lines = restic(["backup", "--json", "--tag", "dial-dr-catalog", "--tag",
-                            "catalog=" + config["catalog_id"], str(path)]).splitlines()
-            summaries = [json.loads(line) for line in lines if json.loads(line).get("message_type") == "summary"]
-            if len(summaries) != 1 or not HEX.fullmatch(summaries[0].get("snapshot_id", "")):
-                raise RuntimeError("Catalog Restic receipt missing")
-            snapshot_id = summaries[0]["snapshot_id"]
-            if "dial-dr-catalog" not in snapshots().get(snapshot_id, {}).get("tags", []):
-                raise RuntimeError("Catalog snapshot not remotely present")
+        with tempfile.TemporaryDirectory(prefix=".catalog-evidence-", dir=output_dir) as temporary:
+            bundle = Path(temporary) / "evidence"
+            sources = {item["kind"]: Path(item["evidence_dir"]) for item in config["classes"]}
+            for entry in entries:
+                receipt = protected(sources[entry["kind"]] / (entry["snapshot_id"] + ".json"))
+                data = receipt.read_bytes()
+                if hashlib.sha256(data).hexdigest() != entry["receipt_sha256"]:
+                    raise RuntimeError("Recovery receipt changed during catalog publication")
+                destination = bundle / entry["kind"] / entry["resource_id"]
+                destination.mkdir(parents=True, mode=0o700, exist_ok=True)
+                with os.fdopen(os.open(destination / receipt.name, os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                                       0o600), "wb") as output:
+                    output.write(data)
+                    output.flush()
+                    os.fsync(output.fileno())
+            with restic_env(config["catalog_repository"], config["catalog_password_file"]):
+                lines = restic(["backup", "--json", "--tag", "dial-dr-catalog", "--tag",
+                                "catalog=" + config["catalog_id"], str(path), str(bundle)]).splitlines()
+                summaries = [json.loads(line) for line in lines if json.loads(line).get("message_type") == "summary"]
+                if len(summaries) != 1 or not HEX.fullmatch(summaries[0].get("snapshot_id", "")):
+                    raise RuntimeError("Catalog Restic receipt missing")
+                snapshot_id = summaries[0]["snapshot_id"]
+                if "dial-dr-catalog" not in snapshots().get(snapshot_id, {}).get("tags", []):
+                    raise RuntimeError("Catalog snapshot not remotely present")
         inspected = inspect(config, snapshot_id)
         if inspected["sha256"] != hashlib.sha256(canonical(document)).hexdigest():
             raise RuntimeError("Off-host catalog content differs from published bytes")
@@ -194,9 +210,25 @@ def inspect(config, catalog_snapshot):
             if len(files) != 1 or files[0].is_symlink() or not files[0].is_file():
                 raise RuntimeError("Catalog restore content invalid")
             document = json.loads(files[0].read_bytes())
+            bundle_dirs = [p for p in Path(temp).rglob("evidence") if p.is_dir() and not p.is_symlink()]
+            bundled = {}
+            if isinstance(document, dict) and document.get("version") == 2:
+                if len(bundle_dirs) != 1:
+                    raise RuntimeError("Catalog receipt bundle missing or ambiguous")
+                for file in bundle_dirs[0].rglob("*.json"):
+                    if file.is_symlink() or file.parent.is_symlink() or file.parent.parent.is_symlink() or \
+                            not file.is_file() or len(file.relative_to(bundle_dirs[0]).parts) != 3:
+                        raise RuntimeError("Catalog receipt bundle has unsafe path")
+                    kind, resource, name = file.relative_to(bundle_dirs[0]).parts
+                    if not name.endswith(".json") or not HEX.fullmatch(name[:-5]):
+                        raise RuntimeError("Catalog receipt bundle has unsafe name")
+                    key = (kind, resource, name[:-5])
+                    if key in bundled:
+                        raise RuntimeError("Repeated catalog receipt")
+                    bundled[key] = hashlib.sha256(file.read_bytes()).hexdigest()
     if not isinstance(document, dict) or set(document) != {"version", "catalog_id", "host_id", "failure_domain",
                                                              "intended_recovery_failure_domain", "created_at", "entries"} or \
-            document["version"] != 1 or any(document[k] != config[source] for k, source in
+            document["version"] not in (1, 2) or any(document[k] != config[source] for k, source in
                                              (("catalog_id", "catalog_id"), ("host_id", "host_id"),
                                               ("failure_domain", "failure_domain"),
                                               ("intended_recovery_failure_domain", "recovery_failure_domain"))):
@@ -211,6 +243,7 @@ def inspect(config, catalog_snapshot):
     expected = {(kind, value) for kind, item in expected_kinds.items() for value in
                 (item["required_instances"] if kind in KINDS else [kind])}
     actual = set()
+    expected_receipts = {}
     remote = {}
     for entry in document["entries"]:
         if not isinstance(entry, dict) or set(entry) != {"kind", "resource_id", "snapshot_id", "archive_sha256",
@@ -221,6 +254,7 @@ def inspect(config, catalog_snapshot):
         if (kind, resource) not in expected or (kind, resource) in actual:
             raise RuntimeError("Missing, unknown or repeated recovery inventory")
         actual.add((kind, resource))
+        expected_receipts[(kind, resource, entry["snapshot_id"])] = entry["receipt_sha256"]
         item = expected_kinds[kind]
         if any(not HEX.fullmatch(entry[key]) for key in
                ("snapshot_id", "archive_sha256", "receipt_sha256", "repository_sha256")) or \
@@ -239,6 +273,8 @@ def inspect(config, catalog_snapshot):
             raise RuntimeError("Catalog backup missing from the off-host repository")
     if actual != expected:
         raise RuntimeError("Catalog omits a required recovery resource")
+    if document["version"] == 2 and bundled != expected_receipts:
+        raise RuntimeError("Catalog receipt bundle differs from verified evidence")
     return {"state": "CATALOG_INSPECTED", "snapshot_id": catalog_snapshot,
             "sha256": hashlib.sha256(canonical(document)).hexdigest(),
             "entries": len(actual), "catalog": document}
@@ -254,6 +290,39 @@ def inspect_latest(config):
     return inspect(config, latest["id"])
 
 
+def recover_receipts(config, catalog_snapshot, target):
+    inspected = inspect(config, catalog_snapshot)
+    if inspected["catalog"]["version"] != 2:
+        raise RuntimeError("Catalog predates recoverable receipts")
+    target = Path(target)
+    if target.is_symlink() or not target.is_dir() or target.stat().st_uid != os.geteuid() or \
+            target.stat().st_mode & 0o077 or list(target.iterdir()):
+        raise RuntimeError("Empty owner-only receipt recovery directory required")
+    expected = {(row["kind"], row["resource_id"], row["snapshot_id"]): row["receipt_sha256"]
+                for row in inspected["catalog"]["entries"]}
+    with restic_env(config["catalog_repository"], config["catalog_password_file"]):
+        with tempfile.TemporaryDirectory(prefix="dial-catalog-receipts-") as temporary:
+            restic(["restore", catalog_snapshot, "--target", temporary])
+            roots = [p for p in Path(temporary).rglob("evidence") if p.is_dir() and not p.is_symlink()]
+            if len(roots) != 1:
+                raise RuntimeError("Recoverable catalog evidence absent")
+            for (kind, resource, snapshot), digest in expected.items():
+                source = roots[0] / kind / resource / (snapshot + ".json")
+                if source.is_symlink() or source.parent.is_symlink() or \
+                        source.parent.parent.is_symlink() or not source.is_file() or \
+                        hashlib.sha256(source.read_bytes()).hexdigest() != digest:
+                    raise RuntimeError("Catalog recovery receipt differs")
+                destination = target / kind / resource
+                destination.mkdir(parents=True, mode=0o700, exist_ok=True)
+                with source.open("rb") as reader, os.fdopen(os.open(destination / source.name,
+                        os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), "wb") as output:
+                    shutil.copyfileobj(reader, output)
+                    output.flush()
+                    os.fsync(output.fileno())
+    return {"state": "CATALOG_RECEIPTS_RECOVERED", "snapshot_id": catalog_snapshot,
+            "receipts": len(expected)}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("config", type=Path)
@@ -263,6 +332,8 @@ def main():
     sub.add_parser("publish").add_argument("output_dir", type=Path)
     sub.add_parser("inspect").add_argument("snapshot_id")
     sub.add_parser("inspect-latest")
+    sub.add_parser("recover-receipts").add_argument("snapshot_id")
+    parser.add_argument("--recovery-dir", type=Path)
     sub.add_parser("validate")
     args = parser.parse_args()
     config = load_config(args.config, args.allow_local_repositories)
@@ -272,6 +343,10 @@ def main():
         result = inspect(config, args.snapshot_id)
     elif args.command == "inspect-latest":
         result = inspect_latest(config)
+    elif args.command == "recover-receipts":
+        if not args.recovery_dir:
+            parser.error("--recovery-dir is required for receipt recovery")
+        result = recover_receipts(config, args.snapshot_id, args.recovery_dir)
     else:
         result = {"state": "CONFIG_VALID", "catalog_id": config["catalog_id"],
                   "classes": [entry["kind"] for entry in config["classes"]]}
