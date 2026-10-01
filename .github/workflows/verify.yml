@@ -83,7 +83,7 @@ jobs:
             ln -s psql "/tmp/dial-pg-client/$command"
           done
           echo /tmp/dial-pg-client >> "$GITHUB_PATH"
-      - run: echo "CONTROL_POSTGRES_IMAGE=$(docker image inspect postgres:17 --format '{{index .RepoDigests 0}}')" >> "$GITHUB_ENV"
+      - run: echo "CONTROL_POSTGRES_IMAGE=postgres:17@sha256:$(docker image inspect postgres:17 --format '{{index .RepoDigests 0}}' | cut -d: -f2)" >> "$GITHUB_ENV"
       - run: python tests/setup_database.py
       - run: python -m unittest tests.test_database_integration -v
       - run: python -m unittest tests.test_control_backup_runtime -v
