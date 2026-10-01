@@ -327,6 +327,17 @@ class DatabaseIntegration(unittest.TestCase):
             self.assertIn(str(app), [item['application_id'] for item in independent['failed']
                                      if item['reason'] == 'release'])
         with psycopg.connect(self.admin) as conn:
+            conn.execute("UPDATE hosting.applications SET active_release_id=NULL WHERE id=%s", (app,))
+        try:
+            with psycopg.connect(self.worker, row_factory=dict_row) as conn:
+                independent = external_public_status(conn, min_applications=0)
+                self.assertIn(str(app), [item['application_id'] for item in independent['failed']
+                                         if item['reason'] == 'release'])
+        finally:
+            with psycopg.connect(self.admin) as conn:
+                conn.execute("UPDATE hosting.applications SET active_release_id=%s WHERE id=%s",
+                             (release, app))
+        with psycopg.connect(self.admin) as conn:
             conn.execute("UPDATE hosting.releases SET state='SERVING' WHERE id=%s", (release,))
             conn.execute("UPDATE hosting.release_health SET checked_at=now()-interval '4 minutes' WHERE release_id=%s",
                          (release,))

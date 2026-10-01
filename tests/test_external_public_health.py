@@ -18,6 +18,7 @@ class Inventory:
         assert "traffic_state='ACTIVE'" in statement
         assert "LEFT JOIN hosting.releases" in statement
         assert "a.active_release_id IS NOT NULL" in statement
+        assert "past.state IN ('SERVING','SUPERSEDED','RETIRED')" in statement
         return self
 
     def fetchall(self):

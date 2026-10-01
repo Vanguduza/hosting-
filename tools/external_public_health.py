@@ -44,7 +44,9 @@ def status(conn, min_applications=1):
         "LEFT JOIN hosting.releases r ON r.id=a.active_release_id "
         "LEFT JOIN hosting.domains d ON d.application_id=a.id "
         "LEFT JOIN hosting.nodes n ON n.id=r.node_id "
-        "WHERE a.traffic_state='ACTIVE' AND a.active_release_id IS NOT NULL ORDER BY a.id").fetchall()
+        "WHERE a.traffic_state='ACTIVE' AND (a.active_release_id IS NOT NULL OR "
+        "EXISTS (SELECT 1 FROM hosting.releases past WHERE past.application_id=a.id "
+        "AND past.state IN ('SERVING','SUPERSEDED','RETIRED'))) ORDER BY a.id").fetchall()
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
         reasons = list(pool.map(probe, rows))
     failures = [{"application_id": str(row["application_id"]), "reason": reason}
