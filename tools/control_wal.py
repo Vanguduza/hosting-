@@ -70,10 +70,15 @@ def receipt_path(evidence, identity, name):
     return evidence / (identity + "-" + name + ".json")
 
 
+def remote_ids(tag, identity):
+    output = command(["restic", "snapshots", "--json", "--tag", tag,
+                      "--tag", "system=" + identity], 60)
+    return {item.get("id") for item in json.loads(output)}
+
+
 def remote(receipt):
-    output = command(["restic", "snapshots", "--json", "--tag", "dial-control-wal",
-                      "--tag", "system=" + receipt["system_id"]], 60)
-    return any(item.get("id") == receipt["snapshot_id"] for item in json.loads(output))
+    return receipt["snapshot_id"] in remote_ids(receipt.get("tag", "dial-control-wal"),
+                                                receipt["system_id"])
 
 
 def load_receipt(path, identity, name):
@@ -86,7 +91,7 @@ def load_receipt(path, identity, name):
     return item
 
 
-def archive(spool, evidence, identity):
+def archive(spool, evidence, identity, tag="dial-control-wal", instance_id=None):
     results = []
     for source in sorted(spool.iterdir()):
         if source.name.endswith(".partial"):
@@ -98,11 +103,12 @@ def archive(spool, evidence, identity):
         digest = file_digest(source)
         if path.exists() or path.is_symlink():
             prior = load_receipt(path, identity, source.name)
-            if prior["sha256"] != digest or not remote(prior):
+            if prior["sha256"] != digest or prior.get("tag", "dial-control-wal") != tag or \
+                    prior.get("instance_id") != instance_id or not remote(prior):
                 raise RuntimeError("Existing WAL segment differs or is missing off-host")
             results.append(prior)
             continue
-        lines = command(["restic", "backup", "--json", "--tag", "dial-control-wal",
+        lines = command(["restic", "backup", "--json", "--tag", tag,
                          "--tag", "system=" + identity, str(source)], 600).splitlines()
         snapshots = [json.loads(line).get("snapshot_id") for line in lines
                      if json.loads(line).get("message_type") == "summary"]
@@ -110,7 +116,7 @@ def archive(spool, evidence, identity):
             raise RuntimeError("WAL snapshot ID unavailable")
         receipt = {"system_id": identity, "name": source.name, "sha256": digest,
                    "snapshot_id": snapshots[0], "created_at": datetime.now(timezone.utc).isoformat(),
-                   "state": "RESTORE_VERIFIED"}
+                   "state": "RESTORE_VERIFIED", "tag": tag, "instance_id": instance_id}
         with tempfile.TemporaryDirectory(prefix="dial-wal-check-") as temp:
             command(["restic", "restore", snapshots[0], "--target", temp], 600)
             restored = [p for p in Path(temp).rglob(source.name) if p.is_file() and not p.is_symlink()]
@@ -131,13 +137,19 @@ def archive(spool, evidence, identity):
     return results
 
 
-def materialize(evidence, identity, target):
+def materialize(evidence, identity, target, start_name=None):
     target = protected(target, directory=True)
     receipts = []
+    remote_sets = {}
     for path in sorted(evidence.glob(identity + "-*.json")):
         name = path.name[len(identity) + 1:-5]
+        if start_name and re.fullmatch(r"[0-9A-F]{24}", name) and name < start_name:
+            continue
         receipt = load_receipt(path, identity, name)
-        if not remote(receipt):
+        tag = receipt.get("tag", "dial-control-wal")
+        if tag not in remote_sets:
+            remote_sets[tag] = remote_ids(tag, identity)
+        if receipt["snapshot_id"] not in remote_sets[tag]:
             raise RuntimeError("Verified WAL snapshot missing off-host")
         with tempfile.TemporaryDirectory(prefix="dial-wal-restore-") as temp:
             command(["restic", "restore", receipt["snapshot_id"], "--target", temp], 600)
@@ -162,7 +174,8 @@ def health(spool, evidence, identity, max_age=300):
                 for path in evidence.glob(identity + "-*.json")]
     if not receipts:
         raise RuntimeError("Verified WAL evidence missing")
-    if not all(remote(receipt) for receipt in receipts):
+    remote_set = remote_ids("dial-control-wal", identity)
+    if not all(receipt["snapshot_id"] in remote_set for receipt in receipts):
         raise RuntimeError("Off-host WAL evidence absent")
     slot = command(["psql", "-X", "-At", "-w", "-c",
                     "SELECT active, coalesce(pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn), -1) "
@@ -176,7 +189,8 @@ def health(spool, evidence, identity, max_age=300):
     return {"state": "WAL_ARCHIVE_HEALTHY", "system_id": identity, "segments": len(receipts)}
 
 
-def pitr(evidence, identity, base_evidence, base_snapshot, image, target_time, probe):
+def pitr(evidence, identity, base_evidence, base_snapshot, image, target_time, probe,
+         archive_name="control-base.tar", database=None, instance_id=None):
     """Prove a selected recovery target in a disposable network and volume."""
     from control_physical_backup import docker
 
@@ -193,6 +207,7 @@ def pitr(evidence, identity, base_evidence, base_snapshot, image, target_time, p
     base_receipt = json.loads(protected(base_evidence / (base_snapshot + ".json")).read_text())
     if (base_receipt.get("snapshot_id") != base_snapshot or
             base_receipt.get("system_id") != identity or
+            base_receipt.get("instance_id") != instance_id or
             base_receipt.get("state") != "RESTORE_VERIFIED" or
             base_receipt.get("format") != "pg_basebackup_tar_wal_fetch" or
             not SHA.fullmatch(base_receipt.get("archive_sha256", "")) or
@@ -207,9 +222,8 @@ def pitr(evidence, identity, base_evidence, base_snapshot, image, target_time, p
         root = Path(temporary)
         archive_dir = root / "wal"
         archive_dir.mkdir(mode=0o700)
-        wal_receipts = materialize(evidence, identity, archive_dir)
         command(["restic", "restore", base_snapshot, "--target", temporary], 600)
-        archives = [p for p in root.rglob("control-base.tar") if p.is_file() and not p.is_symlink()]
+        archives = [p for p in root.rglob(archive_name) if p.is_file() and not p.is_symlink()]
         if len(archives) != 1 or file_digest(archives[0]) != base_receipt["archive_sha256"]:
             raise RuntimeError("Restored PITR base differs from receipt")
         extracted = root / "base"
@@ -219,6 +233,11 @@ def pitr(evidence, identity, base_evidence, base_snapshot, image, target_time, p
         if (extracted / "PG_VERSION").read_text().strip() != "17" or \
                 not (extracted / "backup_manifest").is_file():
             raise RuntimeError("PITR base version or manifest invalid")
+        label = (extracted / "backup_label").read_text()
+        match = re.search(r"START WAL LOCATION:.*\(file ([0-9A-F]{24})\)", label)
+        if not match:
+            raise RuntimeError("PITR base WAL start unavailable")
+        wal_receipts = materialize(evidence, identity, archive_dir, start_name=match.group(1))
         made_network = made_volume = made_wal_volume = made_container = False
         try:
             docker(["network", "create", "--internal", network], 30)
@@ -261,7 +280,7 @@ def pitr(evidence, identity, base_evidence, base_snapshot, image, target_time, p
                 try:
                     state = docker(["exec", "-u", "postgres", container, "psql", "-X", "-At",
                                     "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d",
-                                    base_receipt["database"], "-c",
+                                    database or base_receipt["database"], "-c",
                                     "SELECT pg_is_in_recovery(), pg_get_wal_replay_pause_state()"], 15).strip()
                     if state == "t|paused":
                         break
@@ -272,7 +291,7 @@ def pitr(evidence, identity, base_evidence, base_snapshot, image, target_time, p
                 time.sleep(2)
             output = docker(["exec", "-u", "postgres", container, "psql", "-X", "-At",
                              "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d",
-                             base_receipt["database"], "-c", "BEGIN READ ONLY",
+                             database or base_receipt["database"], "-c", "BEGIN READ ONLY",
                              "-c", "SET LOCAL statement_timeout = '5s'",
                              "-c", probe["sql"], "-c", "ROLLBACK"], 20).splitlines()
             if output != ["BEGIN", "SET", probe["expected"], "ROLLBACK"]:

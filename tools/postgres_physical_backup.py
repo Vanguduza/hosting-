@@ -42,6 +42,11 @@ def save(evidence, receipt):
 def backup(instance, evidence):
     instance = ident(instance)
     container = owned_instance(instance)
+    system_id = run(["docker", "exec", "-u", "postgres", container, "psql", "-X", "-At", "-U",
+                     "postgres", "-d", "appdb", "-c",
+                     "SELECT system_identifier FROM pg_control_system()"], 15).strip()
+    if not re.fullmatch(r"[0-9]{15,21}", system_id):
+        raise RuntimeError("Managed PostgreSQL system identity unavailable")
     if run(["docker", "exec", "-u", "postgres", container, "psql", "-X", "-At", "-U", "postgres",
             "-d", "appdb", "-c", "SELECT count(*) FROM pg_tablespace WHERE spcname NOT IN "
             "('pg_default','pg_global')"], 15).strip() != "0":
@@ -64,6 +69,7 @@ def backup(instance, evidence):
         snapshot = snapshot_id(run(["restic", "backup", "--json", "--tag", "dial-client-postgres-physical",
                                     "--tag", "instance=" + instance, str(archive)]))
         receipt = {"instance_id": instance, "snapshot_id": snapshot, "archive_sha256": digest(archive),
+                   "system_id": system_id,
                    "probe_sha256": hashlib.sha256(json.dumps(probe, sort_keys=True).encode()).hexdigest(),
                    "created_at": datetime.now(timezone.utc).isoformat(), "state": "BACKUP_CREATED",
                    "restore_verified_at": None, "format": "pg_basebackup_tar_wal_fetch"}

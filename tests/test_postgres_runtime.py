@@ -1,9 +1,12 @@
 """Disposable Docker proof: SCRAM login, private network, persistent restart."""
 import json
 import os
+import re
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import uuid
 from pathlib import Path
@@ -18,6 +21,9 @@ from node_agent.valkey import names as cache_names, provision as cache_provision
 sys.path.insert(0, str(ROOT / "tools"))
 from postgres_backup import backup, restore_drill, backup_all, configuration, run
 from postgres_physical_backup import backup as physical_backup, verify as physical_verify
+from postgres_wal import evidence as wal_evidence, identity as wal_identity, members as wal_members
+from postgres_wal import postgres as wal_postgres, ship as wal_ship
+from control_wal import pitr as wal_pitr
 
 
 @unittest.skipUnless(os.environ.get("POSTGRES_RUNTIME_IMAGE"), "requires disposable Docker PostgreSQL image")
@@ -73,7 +79,7 @@ class PostgresRuntime(unittest.TestCase):
                 if os.environ.get("POSTGRES_RUNTIME_BACKUP"):
                     backup_env = {key: os.environ.get(key) for key in
                                   ("RESTIC_REPOSITORY", "RESTIC_PASSWORD_FILE", "BACKUP_EVIDENCE_DIR",
-                                   "BACKUP_PROBE_DIR")}
+                                   "BACKUP_PROBE_DIR", "POSTGRES_WAL_EVIDENCE_ROOT")}
                     try:
                         repository = Path(temp) / "restic"
                         evidence = Path(temp) / "evidence"
@@ -107,12 +113,50 @@ class PostgresRuntime(unittest.TestCase):
                         self.assertGreaterEqual(verified["restored_table_count"], 1)
                         physical_evidence = Path(temp) / "physical-evidence"
                         physical_evidence.mkdir(mode=0o700)
-                        physical = physical_backup(instance, physical_evidence)
-                        self.assertEqual(physical["state"], "BACKUP_CREATED")
-                        physical_result = physical_verify(instance, physical["snapshot_id"],
-                                                          physical_evidence, image)
-                        self.assertEqual(physical_result["state"], "RESTORE_VERIFIED")
-                        self.assertEqual(physical_result["semantic_probe"], "durable_canary")
+                        wal_root = Path(temp) / "wal-evidence"
+                        wal_root.mkdir(mode=0o700)
+                        os.environ["POSTGRES_WAL_EVIDENCE_ROOT"] = str(wal_root)
+                        wal_postgres(container, ["mkdir", "-p", "/var/lib/postgresql/data/wal-spool"])
+                        wal_postgres(container, ["pg_receivewal", "--create-slot", "--if-not-exists",
+                                                 "--slot", "dial_client_wal", "--no-password"])
+                        receiver = subprocess.Popen(["docker", "exec", "-u", "postgres", container,
+                            "pg_receivewal", "-D", "/var/lib/postgresql/data/wal-spool", "-S",
+                            "dial_client_wal", "--synchronous", "--no-password"],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                        try:
+                            physical = physical_backup(instance, physical_evidence)
+                            self.assertEqual(physical["state"], "BACKUP_CREATED")
+                            physical_result = physical_verify(instance, physical["snapshot_id"],
+                                                              physical_evidence, image)
+                            self.assertEqual(physical_result["state"], "RESTORE_VERIFIED")
+                            self.assertEqual(physical_result["semantic_probe"], "durable_canary")
+                            wal_postgres(container, ["psql", "-X", "-v", "ON_ERROR_STOP=1", "-U",
+                                                     "postgres", "-d", "appdb", "-c",
+                                                     "INSERT INTO durable_test VALUES (43)"])
+                            target = wal_postgres(container, ["psql", "-X", "-At", "-U", "postgres",
+                                                              "-d", "appdb", "-c", "SELECT clock_timestamp()"])
+                            time.sleep(1)
+                            wal_postgres(container, ["psql", "-X", "-v", "ON_ERROR_STOP=1", "-U",
+                                                     "postgres", "-d", "appdb", "-c",
+                                                     "INSERT INTO durable_test VALUES (44)", "-c",
+                                                     "SELECT pg_switch_wal()"])
+                            deadline = time.monotonic() + 40
+                            while not any(re.fullmatch(r"[0-9A-F]{24}", n) for n in wal_members(container)):
+                                if receiver.poll() is not None or time.monotonic() > deadline:
+                                    raise RuntimeError("Managed WAL stream did not close a segment")
+                                time.sleep(0.5)
+                        finally:
+                            receiver.send_signal(signal.SIGTERM)
+                            receiver.communicate(timeout=20)
+                        self.assertGreaterEqual(len(wal_ship(instance, wal_root)), 1)
+                        system = wal_identity(container)
+                        wal_postgres(container, ["rm", "-rf", "/var/lib/postgresql/data/wal-spool"])
+                        self.assertEqual(wal_pitr(wal_evidence(wal_root, instance), system,
+                            physical_evidence, physical["snapshot_id"], image, target,
+                            {"sql": "SELECT string_agg(value::text, ',' ORDER BY value) "
+                                    "FROM durable_test", "expected": "42,43"},
+                            archive_name="base.tar", database="appdb", instance_id=instance)["state"],
+                            "PITR_VERIFIED")
                         fleet = backup_all(directory, image)
                         self.assertEqual(fleet["state"], "FLEET_BACKUP_VERIFIED")
                         self.assertEqual(fleet["instances"], 1)

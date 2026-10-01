@@ -1,0 +1,13 @@
+[Unit]
+Description=Check managed PostgreSQL WAL replication and remote evidence
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/dial-hosting/postgres-wal.env
+ExecStart=/usr/bin/python3 /opt/dial-hosting/postgres_wal.py health-all
+TimeoutStartSec=30min
+NoNewPrivileges=yes
+UMask=0077
