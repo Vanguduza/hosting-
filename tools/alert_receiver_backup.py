@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Encrypted receiver queue snapshot with isolated semantic restore proof."""
+"""Encrypted SQLite alert queues with isolated semantic restore proof."""
 import argparse
 import hashlib
 import json
@@ -15,6 +15,10 @@ from pathlib import Path
 
 HEX = re.compile(r"[a-f0-9]{64}\Z")
 FIELDS = "id,name,sequence,state,created_at,body_sha256,accepted_at,attempts,next_at,delivered_at"
+PROFILES = {
+    "receiver": ("alert-receiver.sqlite3", "dial-alert-receiver"),
+    "monitor": ("operator-alerts.sqlite3", "dial-operator-monitor"),
+}
 
 
 def protected(path, directory=False):
@@ -27,8 +31,12 @@ def protected(path, directory=False):
 
 def configuration(path, allow_local=False, require_source=True):
     config = json.loads(protected(path).read_text())
-    if set(config) != {"database", "repository", "password_file", "evidence_dir", "tmp_dir"}:
+    fields = {"database", "repository", "password_file", "evidence_dir", "tmp_dir"}
+    if set(config) not in (fields, fields | {"kind"}):
         raise ValueError("Invalid receiver backup configuration")
+    config["kind"] = config.get("kind", "receiver")
+    if config["kind"] not in PROFILES:
+        raise ValueError("Unknown alert queue recovery profile")
     if not allow_local and not config["repository"].startswith(("s3:", "b2:", "rest:https://", "rclone:")):
         raise ValueError("Encrypted off-host Restic repository required")
     if not config["repository"] or not isinstance(config["repository"], str):
@@ -53,20 +61,26 @@ def restic(config, *args, timeout=600):
     return result.stdout
 
 
-def semantic(path):
+def semantic(path, kind="receiver"):
     # Open read-only: an empty/new SQLite database must not masquerade as a restore.
     with closing(sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)) as db:
         if db.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
             raise RuntimeError("Receiver database integrity failure")
         tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        if "alerts" not in tables:
-            raise RuntimeError("Receiver alert ledger absent")
+        if "alerts" not in tables or kind == "monitor" and "checks" not in tables:
+            raise RuntimeError("Alert ledger or check state absent")
         digest = hashlib.sha256()
-        count = 0
-        for row in db.execute("SELECT " + FIELDS + " FROM alerts ORDER BY id"):
-            digest.update(json.dumps(row, separators=(",", ":"), ensure_ascii=False).encode() + b"\n")
-            count += 1
-        return {"alerts": count, "sha256": digest.hexdigest()}
+        counts = {}
+        selections = ([("checks", "name,state,sequence,observed_at", "name"),
+                       ("alerts", "id,name,sequence,state,created_at,attempts,next_at,delivered_at", "id")]
+                      if kind == "monitor" else [("alerts", FIELDS, "id")])
+        for table, fields, order in selections:
+            digest.update(table.encode() + b"\0")
+            counts[table] = 0
+            for row in db.execute("SELECT " + fields + " FROM " + table + " ORDER BY " + order):
+                digest.update(json.dumps(row, separators=(",", ":"), ensure_ascii=False).encode() + b"\n")
+                counts[table] += 1
+        return counts | {"sha256": digest.hexdigest()}
 
 
 def file_hash(path):
@@ -96,20 +110,21 @@ def save_receipt(config, receipt):
 
 def backup(config):
     with tempfile.TemporaryDirectory(prefix="dial-alert-backup-", dir=config["tmp_dir"]) as directory:
-        snapshot = Path(directory) / "alert-receiver.sqlite3"
+        filename, tag = PROFILES[config["kind"]]
+        snapshot = Path(directory) / filename
         with closing(sqlite3.connect(config["database"].resolve().as_uri() + "?mode=ro", uri=True)) as source, \
                 closing(sqlite3.connect(snapshot)) as destination:
             source.backup(destination)
         snapshot.chmod(0o600)
-        expected = semantic(snapshot)
+        expected = semantic(snapshot, config["kind"])
         archive_sha = file_hash(snapshot)
-        lines = restic(config, "backup", "--json", "--tag", "dial-alert-receiver", str(snapshot)).splitlines()
+        lines = restic(config, "backup", "--json", "--tag", tag, str(snapshot)).splitlines()
         summaries = [json.loads(line) for line in lines if line.strip()]
         snapshots = [item.get("snapshot_id") for item in summaries
                      if item.get("message_type") == "summary"]
         if len(snapshots) != 1 or not isinstance(snapshots[0], str) or not HEX.fullmatch(snapshots[0]):
             raise RuntimeError("Restic snapshot ID unavailable")
-        receipt = {"snapshot_id": snapshots[0], "archive_sha256": archive_sha,
+        receipt = {"snapshot_id": snapshots[0], "kind": config["kind"], "archive_sha256": archive_sha,
                    "semantic": expected, "created_at": datetime.now(timezone.utc).isoformat(),
                    "state": "BACKUP_CREATED", "restore_verified_at": None}
         save_receipt(config, receipt)
@@ -121,15 +136,17 @@ def restore(config, snapshot_id):
         raise ValueError("Full Restic snapshot ID required")
     receipt_path = protected(config["evidence_dir"] / (snapshot_id + ".json"))
     receipt = json.loads(receipt_path.read_text())
-    if receipt.get("snapshot_id") != snapshot_id or not HEX.fullmatch(receipt.get("archive_sha256", "")):
+    if (receipt.get("snapshot_id") != snapshot_id or
+            receipt.get("kind", "receiver") != config["kind"] or
+            not HEX.fullmatch(receipt.get("archive_sha256", ""))):
         raise RuntimeError("Receiver backup receipt differs")
     with tempfile.TemporaryDirectory(prefix="dial-alert-restore-", dir=config["tmp_dir"]) as directory:
         restic(config, "restore", snapshot_id, "--target", directory)
-        matches = [p for p in Path(directory).rglob("alert-receiver.sqlite3")
+        matches = [p for p in Path(directory).rglob(PROFILES[config["kind"]][0])
                    if p.is_file() and not p.is_symlink()]
         if len(matches) != 1 or file_hash(matches[0]) != receipt["archive_sha256"]:
             raise RuntimeError("Restored receiver archive differs")
-        if semantic(matches[0]) != receipt["semantic"]:
+        if semantic(matches[0], config["kind"]) != receipt["semantic"]:
             raise RuntimeError("Restored receiver alerts differ")
     receipt["state"] = "RESTORE_VERIFIED"
     receipt["restore_verified_at"] = datetime.now(timezone.utc).isoformat()
@@ -143,6 +160,8 @@ def health(config, max_age_hours=36):
     if not receipts:
         raise RuntimeError("Receiver backup evidence missing")
     latest = max(receipts, key=lambda item: item["created_at"])
+    if latest.get("kind", "receiver") != config["kind"]:
+        raise RuntimeError("Latest alert backup profile differs")
     created = datetime.fromisoformat(latest["created_at"])
     verified = datetime.fromisoformat(latest["restore_verified_at"]) if latest["restore_verified_at"] else None
     now = datetime.now(timezone.utc)
@@ -150,7 +169,7 @@ def health(config, max_age_hours=36):
             verified is None or verified.tzinfo is None or verified < created or
             created > now + timedelta(minutes=5) or now - created > timedelta(hours=max_age_hours)):
         raise RuntimeError("Receiver restore evidence stale or unverified")
-    snapshots = json.loads(restic(config, "snapshots", "--json", "--tag", "dial-alert-receiver"))
+    snapshots = json.loads(restic(config, "snapshots", "--json", "--tag", PROFILES[config["kind"]][1]))
     if not any(item.get("id") == latest["snapshot_id"] for item in snapshots):
         raise RuntimeError("Receiver snapshot missing from encrypted repository")
     return {"state": "RESTORE_VERIFIED", "snapshot_id": latest["snapshot_id"],
