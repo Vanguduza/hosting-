@@ -1,0 +1,11 @@
+{
+  "smtp_host": "smtp.example.org",
+  "smtp_port": 587,
+  "smtp_user": "dial-alerts@example.org",
+  "password_file": "/etc/dial-alert-receiver/smtp-password",
+  "from": "dial-alerts@example.org",
+  "to": ["operator@example.org"],
+  "message_domain": "example.org",
+  "signing_key_file": "/etc/dial-alert-receiver/signing-key",
+  "database": "/var/lib/dial-alert-receiver/alerts.sqlite3"
+}

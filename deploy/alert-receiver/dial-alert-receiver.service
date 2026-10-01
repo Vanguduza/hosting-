@@ -1,0 +1,21 @@
+[Unit]
+Description=DIAL signed operator alert receiver on loopback
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 /opt/dial-hosting/alert-receiver/alert_receiver.py serve /etc/dial-alert-receiver/config.json
+StateDirectory=dial-alert-receiver
+StateDirectoryMode=0700
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
