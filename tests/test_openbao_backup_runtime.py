@@ -121,7 +121,17 @@ class RaftRecovery(unittest.TestCase):
                     time.sleep(.5)
                 path = "dial/data/resources/" + str(uuid.uuid4())
                 data = {"recovery_canary": secrets.token_hex(24)}
-                request(18210, "POST", path, source["root_token"], {"data": data})
+                deadline = time.monotonic() + 20
+                while True:
+                    try:
+                        request(18210, "POST", path, source["root_token"], {"data": data})
+                        break
+                    except urllib.error.HTTPError as exc:
+                        detail = exc.read(512).decode("utf-8", "replace")
+                        if exc.code != 400 or time.monotonic() > deadline:
+                            raise RuntimeError("Disposable KV v2 canary write failed (HTTP %d): %s" %
+                                               (exc.code, detail)) from None
+                        time.sleep(.5)
                 probe = {"path": path, "sha256": hashlib.sha256(json.dumps(data, sort_keys=True,
                           separators=(",", ":")).encode()).hexdigest()}
                 marker = secrets.token_hex(32)

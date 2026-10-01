@@ -89,6 +89,9 @@ jobs:
       - run: python -m unittest tests.test_control_backup_runtime -v
         env:
           CONTROL_RUNTIME_BACKUP: '1'
+      - run: python -m unittest tests.test_alert_receiver_backup -v
+        env:
+          ALERT_RECEIVER_RUNTIME: '1'
   postgres-runtime:
     runs-on: ubuntu-latest
     steps:
