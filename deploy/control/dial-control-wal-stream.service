@@ -1,0 +1,17 @@
+[Unit]
+Description=DIAL control continuous PostgreSQL WAL receiver
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=/etc/dial-hosting/control-wal.env
+ExecStart=/usr/bin/python3 /opt/dial-hosting/control_wal.py stream
+Restart=always
+RestartSec=10
+NoNewPrivileges=yes
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

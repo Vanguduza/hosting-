@@ -1,0 +1,17 @@
+[Unit]
+Description=DIAL retryable operator alert email delivery
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/python3 /opt/dial-hosting/alert-receiver/alert_receiver.py dispatch /etc/dial-alert-receiver/config.json
+StateDirectory=dial-alert-receiver
+StateDirectoryMode=0700
+TimeoutStartSec=2min
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+UMask=0077

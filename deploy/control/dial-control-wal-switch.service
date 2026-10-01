@@ -1,0 +1,11 @@
+[Unit]
+Description=Close control WAL segment for bounded off-host recovery lag
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/dial-hosting/control-wal.env
+ExecStart=/usr/bin/psql -X -At -w -c "SELECT pg_switch_wal()"
+TimeoutStartSec=30s
+NoNewPrivileges=yes
+UMask=0077

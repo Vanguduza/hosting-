@@ -1,0 +1,11 @@
+[Unit]
+Description=Check DIAL monitor alert recovery evidence hourly
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=1h
+Persistent=true
+Unit=dial-monitor-backup-health.service
+
+[Install]
+WantedBy=timers.target

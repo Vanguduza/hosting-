@@ -1,0 +1,13 @@
+[Unit]
+Description=Verify all managed PostgreSQL WAL segments off-host
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/dial-hosting/postgres-wal.env
+ExecStart=/usr/bin/python3 /opt/dial-hosting/postgres_wal.py archive-all
+TimeoutStartSec=1h
+NoNewPrivileges=yes
+UMask=0077

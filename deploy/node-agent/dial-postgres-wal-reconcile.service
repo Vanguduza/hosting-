@@ -1,0 +1,11 @@
+[Unit]
+Description=Reconcile managed PostgreSQL WAL streams to live inventory
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/dial-hosting/postgres-wal.env
+ExecStart=/usr/bin/python3 /opt/dial-hosting/postgres_wal.py reconcile
+TimeoutStartSec=5min
+NoNewPrivileges=yes
+UMask=0077

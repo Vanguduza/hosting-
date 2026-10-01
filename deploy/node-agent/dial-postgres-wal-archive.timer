@@ -1,0 +1,10 @@
+[Unit]
+Description=Upload completed managed PostgreSQL WAL each minute
+
+[Timer]
+OnCalendar=*:0/1
+Persistent=true
+Unit=dial-postgres-wal-archive.service
+
+[Install]
+WantedBy=timers.target

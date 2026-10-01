@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily DIAL PostgreSQL physical recovery drill
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=2h
+Persistent=yes
+Unit=dial-postgres-physical-backup.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,13 @@
+[Unit]
+Description=DIAL control encrypted off-host WAL segment verification
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/dial-hosting/control-wal.env
+ExecStart=/usr/bin/python3 /opt/dial-hosting/control_wal.py archive
+TimeoutStartSec=30min
+NoNewPrivileges=yes
+UMask=0077

@@ -1,0 +1,7 @@
+{
+  "database": "/var/lib/dial-alert-receiver/alerts.sqlite3",
+  "repository": "s3:https://backup.example.org/dial-alerts",
+  "password_file": "/etc/dial-alert-receiver/restic-password",
+  "evidence_dir": "/var/lib/dial-alert-receiver/evidence",
+  "tmp_dir": "/var/lib/dial-alert-receiver/tmp"
+}

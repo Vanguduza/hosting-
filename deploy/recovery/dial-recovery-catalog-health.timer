@@ -1,0 +1,11 @@
+[Unit]
+Description=Check off-host disaster recovery catalog hourly
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=10m
+Persistent=yes
+Unit=dial-recovery-catalog-health.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.env
+.env.*
+!.env.example
+.venv/
+.pytest_cache/
+*.pem
+*.key
+*.p12
+evidence/local/
+**/.secrets/

@@ -1,0 +1,10 @@
+[Unit]
+Description=Enroll new managed PostgreSQL WAL receivers
+
+[Timer]
+OnCalendar=*:0/1
+Persistent=true
+Unit=dial-postgres-wal-reconcile.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,8 @@
+{
+  "kind": "event",
+  "database": "/var/lib/dial-event-receiver/events.sqlite3",
+  "repository": "s3:https://backup.example.org/dial-events",
+  "password_file": "/etc/dial-event-receiver/restic-password",
+  "evidence_dir": "/var/lib/dial-event-receiver/evidence",
+  "tmp_dir": "/var/lib/dial-event-receiver/tmp"
+}

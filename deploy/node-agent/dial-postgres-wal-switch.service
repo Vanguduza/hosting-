@@ -1,0 +1,11 @@
+[Unit]
+Description=Close WAL segments for each managed PostgreSQL instance
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/dial-hosting/postgres-wal.env
+ExecStart=/usr/bin/python3 /opt/dial-hosting/postgres_wal.py switch-all
+TimeoutStartSec=10min
+NoNewPrivileges=yes
+UMask=0077

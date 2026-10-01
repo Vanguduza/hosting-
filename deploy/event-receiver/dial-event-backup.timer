@@ -1,0 +1,11 @@
+[Unit]
+Description=Back up DIAL event receiver daily
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=30min
+Persistent=true
+Unit=dial-event-backup.service
+
+[Install]
+WantedBy=timers.target

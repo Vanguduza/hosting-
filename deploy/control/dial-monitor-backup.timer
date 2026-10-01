@@ -1,0 +1,11 @@
+[Unit]
+Description=Back up DIAL monitor alerts each day
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=30min
+Persistent=true
+Unit=dial-monitor-backup.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,10 @@
+[Unit]
+Description=Check control WAL archive every five minutes
+
+[Timer]
+OnCalendar=*:0/5
+Persistent=true
+Unit=dial-control-wal-health.service
+
+[Install]
+WantedBy=timers.target

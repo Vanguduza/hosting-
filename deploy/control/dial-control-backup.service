@@ -1,0 +1,13 @@
+[Unit]
+Description=DIAL control database encrypted backup and isolated restore drill
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/dial-hosting/control-backup.env
+ExecStart=/usr/bin/python3 /opt/dial-hosting/control_backup.py backup-and-verify
+TimeoutStartSec=6h
+NoNewPrivileges=yes
+UMask=0077

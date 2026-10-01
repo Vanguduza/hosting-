@@ -1,0 +1,11 @@
+[Unit]
+Description=Verify DIAL event receiver chain each minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+Persistent=true
+Unit=dial-event-receiver-health.service
+
+[Install]
+WantedBy=timers.target
