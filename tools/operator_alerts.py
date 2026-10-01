@@ -21,7 +21,7 @@ CHECKS = {"release", "node", "event", "external"}
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS checks (
  name TEXT PRIMARY KEY, state TEXT NOT NULL CHECK(state IN ('UP','DOWN')),
- sequence INTEGER NOT NULL CHECK(sequence>=0)
+ sequence INTEGER NOT NULL CHECK(sequence>=0), observed_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS alerts (
  id TEXT PRIMARY KEY, name TEXT NOT NULL, sequence INTEGER NOT NULL,
@@ -48,6 +48,8 @@ def connect(path):
     db.execute("PRAGMA journal_mode=WAL")
     db.execute("PRAGMA synchronous=FULL")
     db.executescript(SCHEMA)
+    if "observed_at" not in {row["name"] for row in db.execute("PRAGMA table_info(checks)")}:
+        db.execute("ALTER TABLE checks ADD COLUMN observed_at INTEGER NOT NULL DEFAULT 0")
     path.chmod(0o600)
     return db
 
@@ -61,14 +63,16 @@ def observe(db, name, healthy, now=None):
     try:
         previous = db.execute("SELECT state,sequence FROM checks WHERE name=?", (name,)).fetchone()
         if previous is None:
-            db.execute("INSERT INTO checks(name,state,sequence) VALUES (?,?,0)", (name, state))
+            db.execute("INSERT INTO checks(name,state,sequence,observed_at) VALUES (?,?,0,?)", (name, state, now))
             sequence = 0
         elif previous["state"] == state:
+            db.execute("UPDATE checks SET observed_at=? WHERE name=?", (now, name))
             db.execute("COMMIT")
             return None
         else:
             sequence = previous["sequence"] + 1
-            db.execute("UPDATE checks SET state=?,sequence=? WHERE name=?", (state, sequence, name))
+            db.execute("UPDATE checks SET state=?,sequence=?,observed_at=? WHERE name=?",
+                       (state, sequence, now, name))
         # Establishing a healthy baseline is not an incident. A first failed
         # check is an incident and must be delivered even without prior state.
         alert_id = None
@@ -192,11 +196,15 @@ def health(db, max_age=300):
         raise ValueError("Invalid alert age")
     now = int(time.time())
     rows = db.execute("SELECT name,id,attempts,created_at FROM alerts WHERE delivered_at IS NULL").fetchall()
-    seen = {row["name"] for row in db.execute("SELECT name FROM checks")}
+    observations = {row["name"]: row["observed_at"] for row in
+                    db.execute("SELECT name,observed_at FROM checks")}
+    seen = observations.keys()
+    stale_checks = sorted(name for name, observed_at in observations.items()
+                          if observed_at > now + 60 or now - observed_at > max_age)
     return {"pending": len(rows), "dead": [row["id"] for row in rows if row["attempts"] >= 12],
             "stale": [row["id"] for row in rows if now - row["created_at"] > max_age],
             "checks_seen": sorted(seen), "checks_missing": sorted(CHECKS - seen),
-            "healthy": seen == CHECKS and
+            "checks_stale": stale_checks, "healthy": set(seen) == CHECKS and not stale_checks and
                        not any(row["attempts"] >= 12 or now - row["created_at"] > max_age for row in rows)}
 
 

@@ -45,6 +45,9 @@ class OperatorAlertTests(unittest.TestCase):
             self.assertEqual(health(db)["pending"], 1)
             finalize(db, recovery)
             self.assertTrue(health(db)["healthy"])
+            db.execute("UPDATE checks SET observed_at=0 WHERE name='external'")
+            self.assertIn("external", health(db)["checks_stale"])
+            self.assertFalse(health(db)["healthy"])
             db.close()
 
     def test_expired_claim_retries_same_id_and_dead_alert_is_visible(self):
