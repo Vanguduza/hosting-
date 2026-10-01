@@ -68,8 +68,7 @@ def event_payload(headers, body, key, now=None):
                 any(str(uuid.UUID(event[name])) != event[name] for name in
                     ("organization_id", "resource_id", "request_id")) or
                 not isinstance(event["actor_sub"], str) or not 1 <= len(event["actor_sub"]) <= 255 or
-                not isinstance(event["action"], str) or not 1 <= len(event["action"]) <= 120 or
-                any(ord(c) < 32 for c in event["actor_sub"] + event["action"]) or
+                not isinstance(event["action"], str) or not event["action"] or
                 event["previous_hash"] != "" and not HASH.fullmatch(event["previous_hash"]) or
                 not HASH.fullmatch(event["event_hash"])):
             raise ValueError("Invalid event fields")

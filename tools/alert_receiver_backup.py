@@ -74,7 +74,9 @@ def semantic(path, kind="receiver"):
             raise RuntimeError("Recovery ledger or check state absent")
         if kind == "event":
             from event_receiver import inspect
+            db.row_factory = sqlite3.Row
             inspect(db, min_events=0)
+            db.row_factory = None
         digest = hashlib.sha256()
         counts = {}
         if kind == "event":

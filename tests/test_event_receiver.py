@@ -45,7 +45,7 @@ class EventReceiverTests(unittest.TestCase):
             org = uuid.uuid4()
 
             def event(id_, previous=""):
-                actor, action, resource, request = "alice", "release.serving", uuid.uuid4(), uuid.uuid4()
+                actor, action, resource, request = "alice\nidp", "release.serving", uuid.uuid4(), uuid.uuid4()
                 value = hashlib.sha256((previous + actor + action + str(resource) + str(request)).encode()).hexdigest()
                 return {"audit_event_id": id_, "organization_id": org, "actor_sub": actor,
                         "action": action, "resource_id": resource, "request_id": request,
