@@ -1,8 +1,12 @@
 """Disposable PostgreSQL and Restic proof for the control backup operator."""
 import json
 import os
+import re
+import signal
+import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -13,12 +17,73 @@ sys.path.insert(0, str(ROOT / "tools"))
 from backup_health import evaluate
 from control_backup import backup, environment, verify
 from control_physical_backup import backup as physical_backup, verify as physical_verify
+from control_wal import archive as wal_archive, materialize as wal_materialize, pitr, system_id
 from recovery_catalog import load_config, publish, inspect, inspect_latest
 
 
 @unittest.skipUnless(os.environ.get("TEST_ADMIN_DSN") and os.environ.get("CONTROL_RUNTIME_BACKUP"),
                      "requires disposable migrated PostgreSQL and Restic")
 class ControlBackupRuntime(unittest.TestCase):
+    def test_offhost_wal_and_selected_point_in_time_after_source_loss(self):
+        dsn = urlparse(os.environ["TEST_ADMIN_DSN"])
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            secret = root / "password"
+            secret.write_text("disposable-pitr-restic-password")
+            secret.chmod(0o600)
+            pgpass = root / "pgpass"
+            pgpass.write_text(f"127.0.0.1:{dsn.port}:*:{dsn.username}:{dsn.password}\n")
+            pgpass.chmod(0o600)
+            spool = root / "wal-spool"
+            wal_evidence = root / "wal-evidence"
+            physical_evidence = root / "control-physical-evidence"
+            for directory in (spool, wal_evidence, physical_evidence):
+                directory.mkdir(mode=0o700)
+            env = {"RESTIC_REPOSITORY": str(root / "repository"), "RESTIC_PASSWORD_FILE": str(secret),
+                   "CONTROL_WAL_ALLOW_LOCAL_TEST": "1", "CONTROL_WAL_SPOOL": str(spool),
+                   "CONTROL_WAL_EVIDENCE": str(wal_evidence), "PGHOST": "127.0.0.1",
+                   "PGPORT": str(dsn.port), "PGUSER": dsn.username,
+                   "PGDATABASE": dsn.path.lstrip("/"), "PGPASSFILE": str(pgpass)}
+            with patch.dict(os.environ, env):
+                from control_backup import run
+                run(["restic", "init"])
+                identity = system_id()
+                run(["pg_receivewal", "--create-slot", "--if-not-exists", "--slot", "dial_control_wal",
+                     "--no-password"])
+                receiver = subprocess.Popen(["pg_receivewal", "-D", str(spool), "-S", "dial_control_wal",
+                                             "--synchronous", "--no-password"], env=os.environ.copy(),
+                                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                try:
+                    base = physical_backup(physical_evidence)
+                    physical_verify(physical_evidence, base["snapshot_id"],
+                                    os.environ["CONTROL_POSTGRES_IMAGE"])
+                    run(["psql", "-X", "-v", "ON_ERROR_STOP=1", "-c",
+                         "CREATE TABLE public.pitr_canary(marker text PRIMARY KEY)", "-c",
+                         "INSERT INTO public.pitr_canary VALUES ('before')"])
+                    target = run(["psql", "-X", "-Atc", "SELECT clock_timestamp()"] ).strip()
+                    time.sleep(1)
+                    run(["psql", "-X", "-v", "ON_ERROR_STOP=1", "-c",
+                         "INSERT INTO public.pitr_canary VALUES ('after')", "-c", "SELECT pg_switch_wal()"])
+                    deadline = time.monotonic() + 40
+                    while not any(re.fullmatch(r"[0-9A-F]{24}", p.name) for p in spool.iterdir()):
+                        if receiver.poll() is not None or time.monotonic() > deadline:
+                            raise RuntimeError("Streaming WAL did not close a segment")
+                        time.sleep(0.5)
+                finally:
+                    receiver.send_signal(signal.SIGTERM)
+                    receiver.communicate(timeout=20)
+                receipts = wal_archive(spool, wal_evidence, identity)
+                self.assertGreaterEqual(len(receipts), 1)
+                spool.rename(root / "source-wal-unavailable")
+                destination = root / "restored-wal"
+                destination.mkdir(mode=0o700)
+                self.assertEqual(len(wal_materialize(wal_evidence, identity, destination)), len(receipts))
+                self.assertEqual(pitr(wal_evidence, identity, physical_evidence, base["snapshot_id"],
+                                      os.environ["CONTROL_POSTGRES_IMAGE"], target,
+                                      {"sql": "SELECT string_agg(marker, ',' ORDER BY marker) "
+                                              "FROM public.pitr_canary", "expected": "before"})["state"],
+                                 "PITR_VERIFIED")
+
     def test_backup_and_isolated_restore(self):
         dsn = urlparse(os.environ["TEST_ADMIN_DSN"])
         api_dsn = urlparse(os.environ["TEST_API_DSN"])

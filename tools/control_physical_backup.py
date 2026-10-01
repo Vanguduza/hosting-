@@ -54,6 +54,10 @@ def backup(evidence):
     if run(["psql", "--no-psqlrc", "-Atc",
             "SELECT rolbypassrls OR rolsuper FROM pg_roles WHERE rolname=current_user"]).strip() != "t":
         raise RuntimeError("Control physical backup role cannot see every tenant")
+    system_id = run(["psql", "--no-psqlrc", "-Atc",
+                     "SELECT system_identifier FROM pg_control_system()"]).strip()
+    if not re.fullmatch(r"[0-9]{15,21}", system_id):
+        raise RuntimeError("Control physical PostgreSQL system identity unavailable")
     with tempfile.TemporaryDirectory(prefix="dial-control-physical-") as temp:
         archive = Path(temp) / "control-base.tar"
         with open(archive, "xb") as file:
@@ -70,6 +74,7 @@ def backup(evidence):
             raise RuntimeError("Control physical base backup is empty or invalid")
         snapshot = snapshot_id(run(["restic", "backup", "--json", "--tag", "dial-control-physical", str(archive)]))
         receipt = {"snapshot_id": snapshot, "archive_sha256": file_digest(archive),
+                   "system_id": system_id,
                    "database": os.environ["PGDATABASE"], "format": "pg_basebackup_tar_wal_fetch",
                    "created_at": datetime.now(timezone.utc).isoformat(), "state": "BACKUP_CREATED",
                    "restore_verified_at": None}
