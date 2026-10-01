@@ -1,0 +1,11 @@
+[Unit]
+Description=Inspect DIAL operator alert queue every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+Persistent=true
+Unit=dial-operator-alert-health.service
+
+[Install]
+WantedBy=timers.target

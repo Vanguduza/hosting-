@@ -1,0 +1,14 @@
+[Unit]
+Description=DIAL operator alert queue integrity
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/opt/dial-hosting/release-health-check/venv/bin/python /opt/dial-hosting/release-health-check/tools/operator_alerts.py health --max-age 300
+StateDirectory=dial-hosting-monitor
+StateDirectoryMode=0700
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+UMask=0077
