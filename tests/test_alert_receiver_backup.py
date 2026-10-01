@@ -1,5 +1,6 @@
 """Encrypted Restic recovery of a live receiver SQLite database."""
 import json
+import hashlib
 import os
 import shutil
 import subprocess
@@ -16,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from alert_receiver import accept, connect
 from alert_receiver_backup import backup, configuration, health, restore
 from operator_alerts import connect as connect_monitor, observe
+from event_receiver import accept as accept_event, connect as connect_event
 
 
 @unittest.skipUnless(os.environ.get("ALERT_RECEIVER_RUNTIME") and shutil.which("restic"),
@@ -81,6 +83,39 @@ class AlertReceiverRecoveryTests(unittest.TestCase):
             receipt = backup(config)
             self.assertEqual((receipt["semantic"]["checks"], receipt["semantic"]["alerts"]), (4, 2))
             database.rename(root / "monitor-source-unavailable.sqlite3")
+            recovery = configuration(config_path, allow_local=True, require_source=False)
+            self.assertEqual(restore(recovery, receipt["snapshot_id"])["state"], "RESTORE_VERIFIED")
+            self.assertEqual(health(recovery)["snapshot_id"], receipt["snapshot_id"])
+
+    def test_event_sink_restores_verified_tenant_chain_after_source_loss(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database, repo, password, evidence, temp, config_path = (
+                root / name for name in ("events.sqlite3", "restic", "password",
+                                         "evidence", "tmp", "backup.json"))
+            evidence.mkdir(mode=0o700)
+            temp.mkdir(mode=0o700)
+            password.write_text("disposable-event-recovery-password")
+            password.chmod(0o600)
+            with closing(connect_event(database)) as db:
+                org, resource, request = (str(uuid.uuid4()) for _ in range(3))
+                digest = hashlib.sha256(("alice" + "release.ready" + resource + request).encode()).hexdigest()
+                event = {"id": 1, "organization_id": org, "actor_sub": "alice",
+                         "action": "release.ready", "resource_id": resource, "request_id": request,
+                         "previous_hash": "", "event_hash": digest,
+                         "created_at": "2026-10-01T00:00:00+00:00"}
+                accept_event(db, event, json.dumps(event).encode())
+            config_path.write_text(json.dumps({"kind": "event", "database": str(database),
+                                               "repository": str(repo), "password_file": str(password),
+                                               "evidence_dir": str(evidence), "tmp_dir": str(temp)}))
+            config_path.chmod(0o600)
+            subprocess.run(["restic", "init"], check=True, capture_output=True,
+                           env={**os.environ, "RESTIC_REPOSITORY": str(repo),
+                                "RESTIC_PASSWORD_FILE": str(password)})
+            config = configuration(config_path, allow_local=True)
+            receipt = backup(config)
+            self.assertEqual((receipt["semantic"]["events"], receipt["semantic"]["heads"]), (1, 1))
+            database.rename(root / "event-source-unavailable.sqlite3")
             recovery = configuration(config_path, allow_local=True, require_source=False)
             self.assertEqual(restore(recovery, receipt["snapshot_id"])["state"], "RESTORE_VERIFIED")
             self.assertEqual(health(recovery)["snapshot_id"], receipt["snapshot_id"])

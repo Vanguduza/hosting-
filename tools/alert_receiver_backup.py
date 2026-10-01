@@ -18,6 +18,7 @@ FIELDS = "id,name,sequence,state,created_at,body_sha256,accepted_at,attempts,nex
 PROFILES = {
     "receiver": ("alert-receiver.sqlite3", "dial-alert-receiver"),
     "monitor": ("operator-alerts.sqlite3", "dial-operator-monitor"),
+    "event": ("audit-events.sqlite3", "dial-event-receiver"),
 }
 
 
@@ -67,13 +68,24 @@ def semantic(path, kind="receiver"):
         if db.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
             raise RuntimeError("Receiver database integrity failure")
         tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        if "alerts" not in tables or kind == "monitor" and "checks" not in tables:
-            raise RuntimeError("Alert ledger or check state absent")
+        required = {"events", "heads"} if kind == "event" else \
+                   {"alerts", "checks"} if kind == "monitor" else {"alerts"}
+        if not required <= tables:
+            raise RuntimeError("Recovery ledger or check state absent")
+        if kind == "event":
+            from event_receiver import inspect
+            inspect(db, min_events=0)
         digest = hashlib.sha256()
         counts = {}
-        selections = ([("checks", "name,state,sequence,observed_at", "name"),
-                       ("alerts", "id,name,sequence,state,created_at,attempts,next_at,delivered_at", "id")]
-                      if kind == "monitor" else [("alerts", FIELDS, "id")])
+        if kind == "event":
+            selections = [("events", "id,organization_id,actor_sub,action,resource_id,request_id,"
+                           "previous_hash,event_hash,created_at,body_sha256,received_at", "id"),
+                          ("heads", "organization_id,event_id,event_hash", "organization_id")]
+        elif kind == "monitor":
+            selections = [("checks", "name,state,sequence,observed_at", "name"),
+                          ("alerts", "id,name,sequence,state,created_at,attempts,next_at,delivered_at", "id")]
+        else:
+            selections = [("alerts", FIELDS, "id")]
         for table, fields, order in selections:
             digest.update(table.encode() + b"\0")
             counts[table] = 0

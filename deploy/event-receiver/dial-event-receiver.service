@@ -1,0 +1,21 @@
+[Unit]
+Description=DIAL signed committed audit-event receiver
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 /opt/dial-hosting/event-receiver/event_receiver.py serve /etc/dial-event-receiver/signing-key /var/lib/dial-event-receiver/events.sqlite3
+StateDirectory=dial-event-receiver
+StateDirectoryMode=0700
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

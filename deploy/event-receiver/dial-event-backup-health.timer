@@ -1,0 +1,11 @@
+[Unit]
+Description=Check DIAL event receiver recovery evidence hourly
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=1h
+Persistent=true
+Unit=dial-event-backup-health.service
+
+[Install]
+WantedBy=timers.target
