@@ -10,7 +10,8 @@ import tempfile
 import time
 from pathlib import Path
 
-from control_wal import SEGMENT, archive, load_receipt, pitr, protected, remote_ids
+from control_wal import SEGMENT, archive, evidence_health, load_receipt, pitr, protected
+from control_wal import publish_evidence, recover_evidence, remote_ids
 from postgres_backup import configuration, ident, owned_instance, restore_probe, run
 
 
@@ -83,6 +84,7 @@ def ship(instance, root):
     for name in sorted((name for name in names if re.fullmatch(r"[0-9A-F]{24}", name)))[:-1]:
         load_receipt(directory / (system + "-" + name + ".json"), system, name)
         postgres(container, ["rm", "--", SPOOL + "/" + name], 30)
+    publish_evidence(directory, system, "dial-client-postgres-wal-evidence")
     return receipts
 
 
@@ -109,7 +111,9 @@ def status(instance, root, max_age=300):
                      for name in pending)
         if time.time() - oldest > max_age:
             raise RuntimeError("Managed WAL off-host upload overdue")
-    return {"state": "MANAGED_WAL_HEALTHY", "instance_id": instance, "segments": len(receipts)}
+    return {"state": "MANAGED_WAL_HEALTHY", "instance_id": instance, "segments": len(receipts),
+            "evidence_snapshot": evidence_health(directory, system,
+                                                 "dial-client-postgres-wal-evidence")}
 
 
 def fleet():
@@ -127,12 +131,21 @@ def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("stream", "archive", "health", "switch", "reconcile",
-                                           "archive-all", "health-all", "switch-all", "pitr"))
+                                           "archive-all", "health-all", "switch-all", "pitr",
+                                           "recover-evidence"))
     parser.add_argument("instance_id", nargs="?")
     parser.add_argument("--snapshot-id")
     parser.add_argument("--target")
+    parser.add_argument("--system-id")
     args = parser.parse_args()
     physical, root, image = evidence_root()
+    if args.action == "recover-evidence":
+        if not args.instance_id or not args.system_id:
+            parser.error("Recovery requires instance ID and source system ID")
+        result = recover_evidence(evidence(root, ident(args.instance_id), create=True),
+                                  args.system_id, "dial-client-postgres-wal-evidence")
+        print(json.dumps(result, sort_keys=True))
+        return
     if args.action in ("reconcile", "archive-all", "health-all", "switch-all"):
         if args.instance_id:
             parser.error("Fleet operations take no instance ID")

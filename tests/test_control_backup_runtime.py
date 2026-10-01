@@ -18,6 +18,7 @@ from backup_health import evaluate
 from control_backup import backup, environment, verify
 from control_physical_backup import backup as physical_backup, verify as physical_verify
 from control_wal import archive as wal_archive, materialize as wal_materialize, pitr, system_id
+from control_wal import publish_evidence, recover_evidence
 from recovery_catalog import load_config, publish, inspect, inspect_latest
 
 
@@ -79,6 +80,17 @@ class ControlBackupRuntime(unittest.TestCase):
                 destination.mkdir(mode=0o700)
                 self.assertEqual(len(wal_materialize(wal_evidence, identity, destination)), len(receipts))
                 self.assertEqual(pitr(wal_evidence, identity, physical_evidence, base["snapshot_id"],
+                                      os.environ["CONTROL_POSTGRES_IMAGE"], target,
+                                      {"sql": "SELECT string_agg(marker, ',' ORDER BY marker) "
+                                              "FROM public.pitr_canary", "expected": "before"})["state"],
+                                 "PITR_VERIFIED")
+                receipt_snapshot = publish_evidence(wal_evidence, identity, "dial-control-wal-evidence")
+                wal_evidence.rename(root / "source-receipts-unavailable")
+                recovered = root / "recovered-wal-evidence"
+                recovered.mkdir(mode=0o700)
+                self.assertEqual(recover_evidence(recovered, identity,
+                    "dial-control-wal-evidence")["snapshot_id"], receipt_snapshot)
+                self.assertEqual(pitr(recovered, identity, physical_evidence, base["snapshot_id"],
                                       os.environ["CONTROL_POSTGRES_IMAGE"], target,
                                       {"sql": "SELECT string_agg(marker, ',' ORDER BY marker) "
                                               "FROM public.pitr_canary", "expected": "before"})["state"],

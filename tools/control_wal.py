@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -62,6 +63,95 @@ def file_digest(path):
         for block in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def receipt_files(evidence):
+    files = sorted(path for path in evidence.glob("*.json") if not path.name.startswith(".wal-evidence-"))
+    for path in files:
+        protected(path)
+    return files
+
+
+def evidence_snapshots(tag, identity):
+    rows = json.loads(command(["restic", "snapshots", "--json", "--tag", tag,
+                               "--tag", "system=" + identity], 60))
+    return sorted((row for row in rows if SHA.fullmatch(row.get("id", ""))),
+                  key=lambda row: row["time"], reverse=True)
+
+
+def publish_evidence(evidence, identity, tag):
+    evidence = protected(evidence, directory=True)
+    files = receipt_files(evidence)
+    segments = [path for path in files if path.name.startswith(identity + "-")]
+    if not segments:
+        raise RuntimeError("WAL evidence snapshot requires verified segments")
+    for path in segments:
+        load_receipt(path, identity, path.name[len(identity) + 1:-5])
+    fingerprints = {path.name: file_digest(path) for path in files}
+    marker = evidence / (".wal-evidence-" + identity + ".json")
+    if marker.exists() or marker.is_symlink():
+        previous = json.loads(protected(marker).read_text())
+        if previous.get("files") == fingerprints and previous.get("snapshot_id") in \
+                {row["id"] for row in evidence_snapshots(tag, identity)}:
+            return previous["snapshot_id"]
+    lines = command(["restic", "backup", "--json", "--tag", tag,
+                     "--tag", "system=" + identity, str(evidence)], 600).splitlines()
+    snapshots = [json.loads(line).get("snapshot_id") for line in lines
+                 if json.loads(line).get("message_type") == "summary"]
+    if len(snapshots) != 1 or not isinstance(snapshots[0], str) or not SHA.fullmatch(snapshots[0]):
+        raise RuntimeError("WAL evidence snapshot ID unavailable")
+    with tempfile.TemporaryDirectory(prefix="dial-wal-evidence-check-") as temp:
+        command(["restic", "restore", snapshots[0], "--target", temp], 600)
+        restored = [p for p in Path(temp).rglob(evidence.name) if p.is_dir() and
+                    {f.name: file_digest(f) for f in receipt_files(p)} == fingerprints]
+        if len(restored) != 1:
+            raise RuntimeError("Off-host WAL receipt evidence differs")
+    temporary = marker.with_suffix(".tmp")
+    with os.fdopen(os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), "w") as output:
+        json.dump({"snapshot_id": snapshots[0], "files": fingerprints}, output, sort_keys=True)
+        output.flush()
+        os.fsync(output.fileno())
+    os.replace(temporary, marker)
+    return snapshots[0]
+
+
+def recover_evidence(target, identity, tag):
+    target = protected(target, directory=True)
+    if list(target.iterdir()):
+        raise RuntimeError("WAL recovery target must be empty")
+    snapshots = evidence_snapshots(tag, identity)
+    if not snapshots:
+        raise RuntimeError("Off-host WAL evidence missing")
+    with tempfile.TemporaryDirectory(prefix="dial-wal-evidence-restore-") as temp:
+        command(["restic", "restore", snapshots[0]["id"], "--target", temp], 600)
+        candidates = {p.parent for p in Path(temp).rglob(identity + "-*.json")}
+        if len(candidates) != 1:
+            raise RuntimeError("Restored WAL receipt directory ambiguous")
+        source = candidates.pop()
+        files = receipt_files(source)
+        for path in files:
+            if path.name.startswith(identity + "-"):
+                receipt = load_receipt(path, identity, path.name[len(identity) + 1:-5])
+                if not remote(receipt):
+                    raise RuntimeError("Recovered WAL receipt lost its segment")
+            elif not path.name.startswith("pitr-"):
+                raise RuntimeError("Recovered WAL evidence contains unexpected receipt")
+        for path in files:
+            with path.open("rb") as item, os.fdopen(os.open(target / path.name,
+                    os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), "wb") as output:
+                shutil.copyfileobj(item, output)
+                output.flush()
+                os.fsync(output.fileno())
+    return {"state": "WAL_EVIDENCE_RECOVERED", "snapshot_id": snapshots[0]["id"],
+            "receipts": len(files)}
+
+
+def evidence_health(evidence, identity, tag):
+    marker = json.loads(protected(evidence / (".wal-evidence-" + identity + ".json")).read_text())
+    if (marker.get("files") != {p.name: file_digest(p) for p in receipt_files(evidence)} or
+            marker.get("snapshot_id") not in {r["id"] for r in evidence_snapshots(tag, identity)}):
+        raise RuntimeError("Off-host WAL receipt evidence stale or absent")
+    return marker["snapshot_id"]
 
 
 def receipt_path(evidence, identity, name):
@@ -320,14 +410,16 @@ def pitr(evidence, identity, base_evidence, base_snapshot, image, target_time, p
 def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("stream", "archive", "health", "materialize", "pitr"))
+    parser.add_argument("action", choices=("stream", "archive", "health", "materialize", "pitr",
+                                           "publish-evidence", "recover-evidence"))
     parser.add_argument("--target")
     parser.add_argument("--base-evidence")
     parser.add_argument("--base-snapshot")
     parser.add_argument("--probe-file")
     args = parser.parse_args()
-    spool, evidence = config(require_source=args.action not in ("materialize", "pitr"))
-    identity = system_id() if args.action not in ("materialize", "pitr") else os.environ["CONTROL_WAL_SYSTEM_ID"]
+    spool, evidence = config(require_source=args.action not in ("materialize", "pitr", "recover-evidence"))
+    identity = system_id() if args.action not in ("materialize", "pitr", "recover-evidence") \
+        else os.environ["CONTROL_WAL_SYSTEM_ID"]
     if not re.fullmatch(r"[0-9]{15,21}", identity):
         raise RuntimeError("Invalid PostgreSQL system identity")
     if args.action == "stream":
@@ -335,12 +427,23 @@ def main():
                  "--no-password"], 30)
         os.execvp("pg_receivewal", ["pg_receivewal", "--directory", str(spool),
                                     "--slot", SLOT, "--synchronous", "--no-password"])
-    result = (archive(spool, evidence, identity) if args.action == "archive" else
-              health(spool, evidence, identity) if args.action == "health" else
-              materialize(evidence, identity, args.target) if args.action == "materialize" else
-              pitr(evidence, identity, protected(args.base_evidence, directory=True),
-                   args.base_snapshot, os.environ["CONTROL_POSTGRES_IMAGE"], args.target,
-                   json.loads(protected(args.probe_file).read_text())))
+    if args.action == "archive":
+        rows = archive(spool, evidence, identity)
+        result = {"segments": len(rows), "evidence_snapshot":
+                  publish_evidence(evidence, identity, "dial-control-wal-evidence")}
+    elif args.action == "health":
+        result = health(spool, evidence, identity) | {
+            "evidence_snapshot": evidence_health(evidence, identity, "dial-control-wal-evidence")}
+    elif args.action == "publish-evidence":
+        result = {"evidence_snapshot": publish_evidence(evidence, identity, "dial-control-wal-evidence")}
+    elif args.action == "recover-evidence":
+        result = recover_evidence(Path(args.target), identity, "dial-control-wal-evidence")
+    elif args.action == "materialize":
+        result = materialize(evidence, identity, args.target)
+    else:
+        result = pitr(evidence, identity, protected(args.base_evidence, directory=True),
+                      args.base_snapshot, os.environ["CONTROL_POSTGRES_IMAGE"], args.target,
+                      json.loads(protected(args.probe_file).read_text()))
     print(json.dumps(result, sort_keys=True))
 
 

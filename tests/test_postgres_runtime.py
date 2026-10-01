@@ -23,7 +23,7 @@ from postgres_backup import backup, restore_drill, backup_all, configuration, ru
 from postgres_physical_backup import backup as physical_backup, verify as physical_verify
 from postgres_wal import evidence as wal_evidence, identity as wal_identity, members as wal_members
 from postgres_wal import postgres as wal_postgres, ship as wal_ship
-from control_wal import pitr as wal_pitr
+from control_wal import pitr as wal_pitr, recover_evidence as wal_recover_evidence
 
 
 @unittest.skipUnless(os.environ.get("POSTGRES_RUNTIME_IMAGE"), "requires disposable Docker PostgreSQL image")
@@ -153,6 +153,20 @@ class PostgresRuntime(unittest.TestCase):
                         wal_postgres(container, ["rm", "-rf", "/var/lib/postgresql/data/wal-spool"])
                         self.assertEqual(wal_pitr(wal_evidence(wal_root, instance), system,
                             physical_evidence, physical["snapshot_id"], image, target,
+                            {"sql": "SELECT string_agg(value::text, ',' ORDER BY value) "
+                                    "FROM durable_test", "expected": "42,43"},
+                            archive_name="base.tar", database="appdb", instance_id=instance)["state"],
+                            "PITR_VERIFIED")
+                        from control_wal import publish_evidence as wal_publish_evidence
+                        source_receipts = wal_evidence(wal_root, instance)
+                        evidence_snapshot = wal_publish_evidence(source_receipts, system,
+                                                                 "dial-client-postgres-wal-evidence")
+                        source_receipts.rename(wal_root / "source-receipts-unavailable")
+                        recovered = wal_evidence(wal_root, instance, create=True)
+                        self.assertEqual(wal_recover_evidence(recovered, system,
+                            "dial-client-postgres-wal-evidence")["snapshot_id"], evidence_snapshot)
+                        self.assertEqual(wal_pitr(recovered, system, physical_evidence,
+                            physical["snapshot_id"], image, target,
                             {"sql": "SELECT string_agg(value::text, ',' ORDER BY value) "
                                     "FROM durable_test", "expected": "42,43"},
                             archive_name="base.tar", database="appdb", instance_id=instance)["state"],
