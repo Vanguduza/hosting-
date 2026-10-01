@@ -16,6 +16,8 @@ class Inventory:
 
     def execute(self, statement):
         assert "traffic_state='ACTIVE'" in statement
+        assert "LEFT JOIN hosting.releases" in statement
+        assert "a.active_release_id IS NOT NULL" in statement
         return self
 
     def fetchall(self):
@@ -25,6 +27,7 @@ class Inventory:
 class ExternalPublicHealthTests(unittest.TestCase):
     def test_real_public_proof_is_required_for_each_serving_application(self):
         row = {"application_id": uuid.uuid4(), "release_id": uuid.uuid4(),
+               "release_state": "SERVING",
                "hostname": "app.example.org", "verified_at": object(),
                "public_ipv4": "8.8.8.8", "health_path": "/health"}
         inventory = Inventory([row])
@@ -43,4 +46,12 @@ class ExternalPublicHealthTests(unittest.TestCase):
                 patch("external_public_health.public_probe", return_value=False):
             self.assertEqual(status(inventory)["failed"][0]["reason"], "https")
         self.assertEqual(probe({**row, "verified_at": None}), "configuration")
+        with patch("external_public_health.public_probe") as https:
+            for broken in ({**row, "release_id": None, "release_state": None},
+                           {**row, "release_state": "SUPERSEDED"}):
+                observed = status(Inventory([broken]))
+                self.assertFalse(observed["healthy"])
+                self.assertEqual(observed["active_applications"], 1)
+                self.assertEqual(observed["failed"][-1]["reason"], "release")
+            https.assert_not_called()
         self.assertFalse(status(Inventory([]))["healthy"])

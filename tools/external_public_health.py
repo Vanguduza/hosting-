@@ -20,6 +20,8 @@ from hosting_api.worker import address_proves, public_probe
 
 def probe(row):
     """Return a bounded reason without emitting tenant hostnames or credentials."""
+    if not row["release_id"] or row["release_state"] != "SERVING":
+        return "release"
     if not row["hostname"] or not row["verified_at"] or not row["public_ipv4"]:
         return "configuration"
     if not address_proves(row["hostname"], row["public_ipv4"]):
@@ -37,12 +39,12 @@ def status(conn, min_applications=1):
     if type(min_applications) is not int or not 0 <= min_applications <= 100000:
         raise ValueError("Invalid active application floor")
     rows = conn.execute(
-        "SELECT a.id AS application_id,r.id AS release_id,r.health_path,"
+        "SELECT a.id AS application_id,r.id AS release_id,r.state AS release_state,r.health_path,"
         "d.hostname,d.verified_at,n.public_ipv4 FROM hosting.applications a "
-        "JOIN hosting.releases r ON r.id=a.active_release_id AND r.state='SERVING' "
+        "LEFT JOIN hosting.releases r ON r.id=a.active_release_id "
         "LEFT JOIN hosting.domains d ON d.application_id=a.id "
         "LEFT JOIN hosting.nodes n ON n.id=r.node_id "
-        "WHERE a.traffic_state='ACTIVE' ORDER BY a.id").fetchall()
+        "WHERE a.traffic_state='ACTIVE' AND a.active_release_id IS NOT NULL ORDER BY a.id").fetchall()
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
         reasons = list(pool.map(probe, rows))
     failures = [{"application_id": str(row["application_id"]), "reason": reason}

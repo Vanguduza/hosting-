@@ -39,6 +39,7 @@ from quota_health import inspect as inspect_quota_health
 from register_node import register as register_node
 from set_node_state import set_state as set_node_state
 from node_health_check import status as node_health_status
+from external_public_health import status as external_public_status
 from release_health_check import status as release_health_status
 from audit_checkpoint import config_file as checkpoint_config, publish as publish_checkpoint, inspect_snapshot, check_latest
 import admit_image
@@ -322,6 +323,9 @@ class DatabaseIntegration(unittest.TestCase):
         with psycopg.connect(self.worker, row_factory=dict_row) as conn:
             self.assertIn(str(app), [item['application_id'] for item in
                           release_health_status(conn, min_applications=1)['inconsistent']])
+            independent = external_public_status(conn, min_applications=0)
+            self.assertIn(str(app), [item['application_id'] for item in independent['failed']
+                                     if item['reason'] == 'release'])
         with psycopg.connect(self.admin) as conn:
             conn.execute("UPDATE hosting.releases SET state='SERVING' WHERE id=%s", (release,))
             conn.execute("UPDATE hosting.release_health SET checked_at=now()-interval '4 minutes' WHERE release_id=%s",
