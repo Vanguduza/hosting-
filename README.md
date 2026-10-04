@@ -6,6 +6,13 @@ This repository binds the DIAL hosting blueprint to source control and contains 
 
 `BUILD_READY=false`, `RUNTIME_QUALIFIED=false`, `PRODUCTION_QUALIFIED=false`. The repository contains working tenant/project intent and audit code, database schema, deterministic pack validation, and a local control-plane profile. Deployment, node agents, build, billing, managed Supabase, restores, and client portal have **not** been implemented or certified. A missing capability is omitted rather than represented by a fake route or green status.
 
+
+## DIAL Partner Business Platform integration
+
+This control plane is the infrastructure authority for DIAL-built supplier and service-provider applications produced by the Partner App Factory. It accepts typed hosting desired state; it does not become supplier, catalogue, pricing, order, booking, payment or marketplace authority.
+
+See [the Partner Platform Integration Contract](docs/PARTNER_PLATFORM_INTEGRATION.md). This cross-repository contract does not change the certification flags above.
+
 ## Local control-plane verification
 
 ```bash
