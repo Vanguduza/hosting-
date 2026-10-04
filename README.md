@@ -1,6 +1,6 @@
 # DIAL Self-Hosted Client Cloud
 
-This repository binds the DIAL hosting blueprint to source control and contains the first implemented control-plane contracts. The attached [Rev 1 blueprint](development-pack/BLUEPRINT_REV_1.md) remains the requirements source; [Review Rev 2](development-pack/REVIEW_REV_2.md) records corrections and execution gates.
+This repository binds the DIAL hosting blueprint to source control and contains the first implemented control-plane contracts. The foundational Rev 1 blueprint and Rev 2 review currently live on branch `codex/hosting-foundation-20260923`; they are not present on `main`, so this README does not treat broken relative paths as current-main artifacts. Their requirements/corrections remain provenance for the implemented control-plane contracts until those pack artifacts are deliberately reconciled onto the canonical branch.
 
 ## Current certification
 
@@ -30,4 +30,4 @@ The last command requires Docker, a real OIDC issuer, and the values described i
 - Image digests, provider credentials, host topology, and resource budgets are external inputs, never guessed in source.
 - The 8 GB Netcup node is an orchestration target only after measured capacity admission. Production app, database, registry, and Supabase placement remains configurable.
 
-Read [the review](development-pack/REVIEW_REV_2.md) before adding infrastructure. No certificate may be promoted by documentation or by passing a unit test alone.
+Before adding infrastructure, reconcile changes against the foundational Rev 2 review on `codex/hosting-foundation-20260923` and current repository evidence. No certificate may be promoted by documentation or by passing a unit test alone.
