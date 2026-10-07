@@ -202,7 +202,9 @@ jobs:
         with:
           python-version: '3.13'
       - run: python -m pip install boto3==1.43.101
-      - run: sudo apt-get update && sudo apt-get install -y restic
+      - run: |
+          bash tests/install_restic.sh "$RUNNER_TEMP/hosting-restic"
+          echo "$RUNNER_TEMP/hosting-restic" >> "$GITHUB_PATH"
       - run: docker pull dxflrs/garage:v2.3.0
       - run: docker pull busybox:1.37.0-musl
       - run: |

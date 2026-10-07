@@ -155,6 +155,9 @@ The fixture-free Python suite passes 91 tests, with 74 runtime checks skipped in
 that invocation (165 total); all 31 JavaScript tests and both browser proofs pass.
 OpenAPI advertises 37 paths / 49 operations, and fresh startup expects 28 migrations.
 These are software/fixture checks; all readiness and qualification flags remain false.
+The storage CI fixture installs pinned Restic 0.18.1 from its verified archive,
+with bounded HTTPS download attempts, after a runner stalled in Ubuntu package
+installation. Production tool installation remains a separate deployment step.
 
 ## Remaining deployment inputs
 
