@@ -20,7 +20,10 @@ until its remaining requirements and qualification gates are satisfied.
 The [development client portal](CLIENT_PORTAL.md) provides tenant project and
 application selection, real health/incident/release/domain/service/quota readback,
 project/application creation, domain proof, durable service provisioning and
-release submission. It uses existing authenticated API contracts and adds no
+release submission and rollback. The resumed build adds paginated audit history,
+owner-managed invitation/membership/service-grant screens, invitation acceptance,
+private token redaction/clearing and stricter unauthorized/stream failure handling.
+It uses existing authenticated API contracts and adds no
 new database authority or infrastructure success state. Browser asset and client
 contract tests are included in CI. The Partner Platform specification remains
 specified; this portal is not a HostingIntent provisioning controller.
@@ -41,21 +44,21 @@ specified; this portal is not a HostingIntent provisioning controller.
 5. Implement typed Partner HostingIntent orchestration with qualified profiles,
    canonical entitlement references, visible transformations and per-stage
    receipts; do not treat a specification or portal as a successful deployment.
-6. Complete the commercial workspace: issuer login/renewal, team/audit UI,
+6. Complete the commercial workspace: issuer login/renewal, step-up protection,
    notifications, measured metering, plans/entitlements/billing and guarded
    transfer/export/offboarding. Complete abuse detection, stronger untrusted-code
    isolation, node quarantine and untrusted PR previews.
 7. Gather exact-version/license evidence and estate-level acceptance against all
    80 development units before production and owner-acceptance promotion.
 
-The manifest now tracks **41 partial units** and no complete production
+The manifest now tracks **42 partial units** and no complete production
 certificate. The original blueprint is the full scope; this sequence groups
 dependencies and does not remove requirements. The portal advances DU-053,
-DU-054 and DU-055; their live/complete commercial requirements remain open.
+DU-054, DU-055 and DU-058; their live/complete commercial requirements remain open.
 
 ## Continuation verification
 
-Five Python portal/recovery-catalog tests and ten JavaScript client tests pass
+Five Python portal/recovery-catalog tests and twenty JavaScript client tests pass
 locally. Pack consistency, Python compilation, workflow YAML parsing and
 whitespace checks pass. The recovery-catalog test now explicitly creates the
 unsafe file permissions it intends to reject, so it also works under a private

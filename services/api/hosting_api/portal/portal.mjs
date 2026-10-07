@@ -22,7 +22,8 @@ export class ControlClient {
     this.#session = new AbortController();
   }
   async request(path, body) {
-    if (!/^\/v1\/[a-z0-9/-]+$/.test(path) || path.includes('//')) {
+    const auditCursor = /^\/v1\/organizations\/[0-9a-f-]{36}\/audit\?after=(0|[1-9][0-9]{0,18})$/.test(path);
+    if ((!/^\/v1\/[a-z0-9/-]+$/.test(path) && !(auditCursor && body === undefined)) || path.includes('//')) {
       throw new Error('Invalid control API path.');
     }
     if (!this.#token) throw new Error('Connect to your workspace first.');
@@ -42,6 +43,12 @@ export class ControlClient {
       throw new Error('Connection interrupted. Refresh readback before retrying a change.');
     }
     if (session.signal.aborted) throw new DOMException('Session ended', 'AbortError');
+    if (response.status === 401) {
+      this.disconnect();
+      try { response.body?.cancel().catch(() => {}); } catch { /* Authentication is already cleared. */ }
+      throw new ApiError(401, 'unauthorized');
+    }
+    if (!response.body) throw new Error('Control API returned an invalid response.');
     // Bound memory even when a proxy returns an unexpectedly large body.
     const reader = response.body.getReader();
     const chunks = [];
@@ -54,7 +61,12 @@ export class ControlClient {
         if (size > 1048576) throw new Error('Control API response is too large.');
         chunks.push(value);
       }
-    } finally { await reader.cancel(); }
+    } catch {
+      if (session.signal.aborted) throw new DOMException('Session ended', 'AbortError');
+      throw new Error(size > 1048576 ? 'Control API response is too large.' : 'Connection interrupted while reading control API response.');
+    } finally {
+      try { reader.cancel().catch(() => {}); } catch { /* Do not expose transport diagnostics. */ }
+    }
     if (session.signal.aborted) throw new DOMException('Session ended', 'AbortError');
     const bytes = new Uint8Array(size);
     let offset = 0;
@@ -68,7 +80,6 @@ export class ControlClient {
     if (!response.ok) {
       const code = typeof result.error === 'string' && /^[a-z_]{1,80}$/.test(result.error)
         ? result.error : 'request_failed';
-      if (response.status === 401) this.disconnect();
       throw new ApiError(response.status, code);
     }
     return result;
@@ -85,15 +96,72 @@ export class MutationKeys {
     return this.#keys.get(identity);
   }
   clear() { this.#keys.clear(); }
+  resetRoute(path) {
+    for (const identity of this.#keys.keys()) if (JSON.parse(identity)[0] === path) this.#keys.delete(identity);
+  }
 }
 
 export function canManage(role) { return role === 'owner' || role === 'admin'; }
+export function canManageAccess(role) { return role === 'owner'; }
+
+const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+export function invitationState(invitation, now = Date.now()) {
+  if (invitation.revoked_at) return 'REVOKED';
+  if (invitation.accepted_at) return 'ACCEPTED';
+  const expiry = Date.parse(invitation.expires_at);
+  return !Number.isFinite(expiry) || expiry <= now ? 'EXPIRED' : 'PENDING';
+}
+
+export function visibleReceipt(receipt) {
+  const result = {...receipt};
+  if (Object.hasOwn(result, 'token')) result.token = '[shown separately once]';
+  return result;
+}
+
+export class AuditPages {
+  #revision = 0;
+  constructor() { this.reset(); }
+  reset(organization = '') {
+    this.#revision++;
+    this.organization = organization; this.events = []; this.after = 0;
+    this.hasMore = false; this.loaded = false;
+  }
+  async load(client) {
+    if (!CANONICAL_UUID.test(this.organization)) throw new Error('Select an organization first.');
+    const revision = ++this.#revision, after = this.after;
+    const result = await client.request(`/v1/organizations/${this.organization}/audit?after=${after}`);
+    if (revision !== this.#revision) throw new DOMException('Workspace changed', 'AbortError');
+    if (!Array.isArray(result.events) || result.events.length > 100 || typeof result.has_more !== 'boolean' ||
+        !Number.isSafeInteger(result.next_after) || result.next_after < after ||
+        (result.has_more && !result.events.length)) throw new Error('Invalid audit pagination response.');
+    let cursor = after;
+    let previous = this.events.length ? this.events.at(-1).event_hash : '';
+    for (const event of result.events) {
+      if (!event || !Number.isSafeInteger(event.id) || event.id <= cursor ||
+          typeof event.actor_sub !== 'string' || typeof event.action !== 'string' ||
+          !CANONICAL_UUID.test(event.resource_id) || !CANONICAL_UUID.test(event.request_id) ||
+          typeof event.created_at !== 'string' || !Number.isFinite(Date.parse(event.created_at)) ||
+          !/^[0-9a-f]{64}$/.test(event.event_hash) || event.previous_hash !== previous) {
+        throw new Error('Invalid audit event or broken page continuity.');
+      }
+      cursor = event.id; previous = event.event_hash;
+    }
+    if (result.next_after !== cursor) throw new Error('Invalid audit pagination cursor.');
+    // Publish the new page atomically; rejected pages do not change the cursor.
+    this.events.push(...result.events); this.after = cursor;
+    this.hasMore = result.has_more; this.loaded = true;
+    return result.events;
+  }
+}
 
 function bootstrap() {
   const $ = id => document.getElementById(id);
   const client = new ControlClient();
   const keys = new MutationKeys();
+  const audit = new AuditPages();
   let organizations = [], projects = [], applications = [];
+  let members = [], invitations = [], grants = [];
   let generation = 0, busy = false;
   const element = (tag, text = '', className = '') => {
     const node = document.createElement(tag); node.textContent = text;
@@ -123,9 +191,23 @@ function bootstrap() {
   function clearDetails() {
     for (const id of ['quota','health','resources','domain','traffic','incidents','releases','dns-proof']) $(id).replaceChildren();
     $('release-count').textContent = ''; $('dns-proof').hidden = true;
+    $('rollback-target').replaceChildren();
+  }
+  function clearPrivateReceipt() {
+    $('receipt').textContent = 'No changes requested for this selection.';
+    $('invitation-token').textContent = ''; $('invitation-secret').hidden = true;
+    for (const id of ['project-form','application-form','release-form','domain-form','resource-form','service-form','invitation-form','accept-form']) $(id).reset();
+  }
+  function clearOrganizationViews() {
+    audit.reset($('organizations').value);
+    members = []; invitations = []; grants = [];
+    for (const id of ['audit-events','members','invitations','service-accounts','remove-member-target','revoke-invitation-target','revoke-service-target']) $(id).replaceChildren();
+    $('audit-state').textContent = 'Audit readback not loaded.';
+    $('audit-more').hidden = true;
   }
   function disconnect() {
-    generation++; client.disconnect(); keys.clear(); connected(false); clearDetails();
+    generation++; client.disconnect(); keys.clear(); connected(false); clearDetails(); clearOrganizationViews();
+    clearPrivateReceipt();
     organizations = []; projects = []; applications = [];
     for (const id of ['organizations','projects','applications']) $(id).replaceChildren();
     $('receipt').textContent = 'No changes requested in this session.';
@@ -151,23 +233,103 @@ function bootstrap() {
     const manage = canManage(selectedRole());
     $('create-panel').hidden = !manage || !$('organizations').value;
     $('manage-panel').hidden = !manage || !$('applications').value;
+    $('rollback-panel').hidden = !manage || !$('applications').value;
     $('application-form').querySelector('button').disabled = !projects.length;
+    const owner = canManageAccess(selectedRole()) && Boolean($('organizations').value);
+    $('access-panel').hidden = !owner;
+    $('service-form').querySelector('button').disabled = !$('applications').value;
+    $('remove-member-form').querySelector('button').disabled = !members.some(member => ['admin','viewer'].includes(member.role));
+    $('revoke-invitation-form').querySelector('button').disabled = !invitations.some(invite => invitationState(invite) === 'PENDING');
+    $('revoke-service-form').querySelector('button').disabled = !grants.some(grant => !grant.revoked_at);
+    $('rollback-form').querySelector('button').disabled = !$('rollback-target').value;
   }
-  async function loadOrganizations() {
+  async function loadOrganizations(preferred) {
+    const previous = $('organizations').value;
     organizations = list(await client.request('/v1/organizations'), 'organizations');
-    options('organizations', organizations, org => `${org.name} · ${org.role}`);
+    options('organizations', organizations, org => `${org.name} · ${org.role}`, preferred);
+    if ($('organizations').value !== previous) clearPrivateReceipt();
+    if (!canManageAccess(selectedRole())) {
+      $('invitation-token').textContent = ''; $('invitation-secret').hidden = true;
+    }
     connected(true); await loadProjects();
   }
   async function loadProjects(preferred) {
+    clearOrganizationViews();
     clearDetails(); applications = []; options('applications', [], () => '');
     projects = $('organizations').value ? list(await client.request(`${orgPath()}/projects`), 'projects') : [];
-    options('projects', projects, project => project.name, preferred); await loadApplications();
+    options('projects', projects, project => project.name, preferred);
+    const results = await Promise.allSettled([loadApplications(), loadOrganizationViews()]);
+    const failures = results.filter(result => result.status === 'rejected');
+    const authFailure = failures.find(result => result.reason instanceof ApiError && result.reason.status === 401);
+    if (failures.length) throw (authFailure || failures[0]).reason;
   }
   async function loadApplications(preferred) {
     clearDetails();
     applications = $('projects').value ? list(await client.request(`${orgPath()}/projects/${$('projects').value}/applications`), 'applications') : [];
     options('applications', applications, app => `${app.name} · ${app.environment}`, preferred);
     await loadDetails();
+  }
+  function showRows(id, rows, columns, empty) {
+    $(id).replaceChildren();
+    if (!rows.length) { const row = element('tr'), cell = element('td', empty); cell.colSpan = columns.length; row.append(cell); $(id).append(row); return; }
+    for (const item of rows) {
+      const row = element('tr');
+      for (const column of columns) row.append(element('td', String(column(item) ?? '—'), 'details'));
+      $(id).append(row);
+    }
+  }
+  async function loadAudit() {
+    try {
+      await audit.load(client);
+      showRows('audit-events', audit.events, [event => event.id, event => event.action, event => event.actor_sub,
+        event => date(event.created_at), event => event.resource_id], 'No committed events.');
+      $('audit-state').textContent = `${audit.events.length} committed events shown. Integrity checked by the control API.`;
+      $('audit-more').hidden = !audit.hasMore;
+    } catch (error) {
+      if (error.name !== 'AbortError') $('audit-state').textContent = 'Audit readback unavailable. Refresh or retry the current page.';
+      throw error;
+    }
+  }
+  async function loadAccess() {
+    if (!canManageAccess(selectedRole()) || !$('organizations').value) return;
+    const jobs = [['members','team/members'],['invitations','team/invitations'],['service-accounts','service-accounts']];
+    const revision = generation;
+    const results = await Promise.allSettled(jobs.map(async ([id, suffix]) => [id, await client.request(`${orgPath()}/${suffix}`)]));
+    if (revision !== generation) return;
+    let failure;
+    for (let index = 0; index < results.length; index++) {
+      const result = results[index], id = jobs[index][0];
+      if (result.status === 'rejected') {
+        if (id === 'members') { members = []; $('remove-member-target').replaceChildren(); }
+        if (id === 'invitations') { invitations = []; $('revoke-invitation-target').replaceChildren(); }
+        if (id === 'service-accounts') { grants = []; $('revoke-service-target').replaceChildren(); }
+        showRows(id, [], [value => value], 'Readback unavailable.');
+        if (!failure || result.reason.status === 401) failure = result.reason;
+        continue;
+      }
+      const [, data] = result.value;
+      if (id === 'members') {
+        members = list(data, 'members');
+        showRows(id, members, [member => member.actor_sub, member => member.role], 'No team members.');
+        options('remove-member-target', members.filter(member => ['admin','viewer'].includes(member.role)).map(member => ({...member, id: member.actor_sub})), member => `${member.actor_sub} · ${member.role}`);
+      } else if (id === 'invitations') {
+        invitations = list(data, 'invitations');
+        showRows(id, invitations, [invite => invite.role, invite => invitationState(invite), invite => date(invite.expires_at), invite => invite.id], 'No invitations.');
+        options('revoke-invitation-target', invitations.filter(invite => invitationState(invite) === 'PENDING'), invite => `${invite.role} · ${invite.id}`);
+      } else {
+        grants = list(data, 'service_accounts');
+        showRows(id, grants, [grant => grant.client_id, grant => grant.actor_sub, grant => grant.application_id, grant => grant.revoked_at ? 'REVOKED' : 'ACTIVE'], 'No service grants.');
+        options('revoke-service-target', grants.filter(grant => !grant.revoked_at), grant => `${grant.client_id} · ${grant.application_id}`);
+      }
+    }
+    if (failure) throw failure;
+  }
+  async function loadOrganizationViews() {
+    if (!$('organizations').value) return;
+    const results = await Promise.allSettled([loadAudit(), loadAccess()]);
+    const failures = results.filter(result => result.status === 'rejected');
+    const authFailure = failures.find(result => result.reason instanceof ApiError && result.reason.status === 401);
+    if (failures.length) throw (authFailure || failures[0]).reason;
   }
   async function loadDetails() {
     clearDetails(); const current = generation;
@@ -197,6 +359,8 @@ function bootstrap() {
         $('health').append(badge(data.state), element('p', `Last checked: ${date(data.checked_at)}`, 'hint'));
       } else if (id === 'releases') {
         const rows = list(data, 'releases'); $('release-count').textContent = `${rows.length} recent releases`;
+        const active = applications.find(app => app.id === $('applications').value)?.active_release_id;
+        options('rollback-target', rows.filter(release => ['SERVING','SUPERSEDED','RETIRED'].includes(release.state) && release.id !== active), release => `${date(release.created_at)} · ${release.id}`);
         if (!rows.length) { const row = element('tr'); const cell = element('td', 'No releases yet.'); cell.colSpan = 4; row.append(cell); $('releases').append(row); }
         for (const release of rows) {
           const row = element('tr'), state = element('td'); state.append(badge(release.state));
@@ -225,11 +389,11 @@ function bootstrap() {
     if (!$('applications').value) $('health').append(element('p', 'Select or create an application.', 'hint'));
     if (failures) throw new Error(`${failures} readbacks are unavailable. Refresh to check again.`);
   }
-  async function mutate(path, body, idempotent = false) {
-    if (!canManage(selectedRole())) throw new Error('Your workspace role allows read access.');
+  async function mutate(path, body, idempotent = false, ownerOnly = false) {
+    if (ownerOnly ? !canManageAccess(selectedRole()) : !canManage(selectedRole())) throw new Error(ownerOnly ? 'Only an organization owner can change access.' : 'Your workspace role allows read access.');
     if (idempotent) body = {...body, idempotency_key: keys.forRequest(path, body)};
     const data = await client.request(path, body);
-    $('receipt').textContent = JSON.stringify(data, null, 2);
+    $('receipt').textContent = JSON.stringify(visibleReceipt(data), null, 2);
     return data;
   }
   const values = form => Object.fromEntries(new FormData(form));
@@ -242,9 +406,9 @@ function bootstrap() {
   });
   $('disconnect').addEventListener('click', disconnect);
   $('refresh').addEventListener('click', () => run(loadOrganizations));
-  $('organizations').addEventListener('change', () => { projects = []; options('projects', [], () => ''); run(loadProjects); });
-  $('projects').addEventListener('change', () => { applications = []; options('applications', [], () => ''); run(loadApplications); });
-  $('applications').addEventListener('change', () => run(loadDetails));
+  $('organizations').addEventListener('change', () => { clearPrivateReceipt(); projects = []; options('projects', [], () => ''); run(loadProjects); });
+  $('projects').addEventListener('change', () => { clearPrivateReceipt(); applications = []; options('applications', [], () => ''); run(loadApplications); });
+  $('applications').addEventListener('change', () => { clearPrivateReceipt(); run(loadDetails); });
   bind('project-form', async body => { const result = await mutate(`${orgPath()}/projects`, body); $('project-form').reset(); await loadProjects(result.id); });
   bind('application-form', async body => { const result = await mutate(`${orgPath()}/projects/${$('projects').value}/applications`, body); $('application-form').reset(); await loadApplications(result.id); });
   bind('release-form', async body => {
@@ -255,6 +419,48 @@ function bootstrap() {
   $('verify-domain').addEventListener('click', () => run(async () => { await mutate(`${appPath()}/domain/verify`, {}); await loadDetails(); }));
   bind('resource-form', async ({kind, memory_mb, cpu_milli}) => {
     await mutate(`${appPath()}/${kind}`, {memory_mb: Number(memory_mb), cpu_milli: Number(cpu_milli)}, true); await loadDetails();
+  });
+  bind('rollback-form', async body => { await mutate(`${appPath()}/rollback`, body, true); await loadDetails(); });
+  $('new-release').addEventListener('click', () => {
+    keys.resetRoute(`${appPath()}/releases`);
+    message('New release request prepared. Submitting will use a new retry key.');
+  });
+  $('audit-more').addEventListener('click', () => run(loadAudit));
+  $('audit-refresh').addEventListener('click', () => run(async () => {
+    audit.reset($('organizations').value); $('audit-events').replaceChildren(); $('audit-more').hidden = true;
+    await loadAudit();
+  }));
+  bind('invitation-form', async ({role, expires_hours}) => {
+    const data = await mutate(`${orgPath()}/team/invitations`, {role, expires_hours: Number(expires_hours), confirm: `invite_${role}`}, true, true);
+    if (typeof data.token === 'string') {
+      $('invitation-token').textContent = data.token; $('invitation-secret').hidden = false;
+    }
+    await loadAccess();
+  });
+  $('new-invitation').addEventListener('click', () => {
+    keys.resetRoute(`${orgPath()}/team/invitations`);
+    $('invitation-token').textContent = ''; $('invitation-secret').hidden = true;
+    message('New invitation request prepared. Existing invitations remain active until revoked or expired.');
+  });
+  $('clear-invitation').addEventListener('click', () => { $('invitation-token').textContent = ''; $('invitation-secret').hidden = true; });
+  bind('remove-member-form', async body => {
+    await mutate(`${orgPath()}/team/members/remove`, {...body, confirm: 'remove_member'}, false, true);
+    await loadAccess();
+  });
+  bind('revoke-invitation-form', async body => { await mutate(`${orgPath()}/team/invitations/revoke`, body, false, true); await loadAccess(); });
+  bind('service-form', async body => {
+    await mutate(`${orgPath()}/service-accounts`, {...body, application_id: $('applications').value}, false, true);
+    $('service-form').reset(); await loadAccess();
+  });
+  bind('revoke-service-form', async body => {
+    await mutate(`${orgPath()}/service-accounts/revoke`, {...body, confirm: 'revoke_service_account'}, false, true);
+    await loadAccess();
+  });
+  bind('accept-form', async body => {
+    $('accept-form').reset();
+    const data = await client.request('/v1/team/invitations/accept', body);
+    await loadOrganizations(data.organization_id);
+    $('receipt').textContent = JSON.stringify(visibleReceipt(data), null, 2);
   });
   connected(false);
 }

@@ -16,6 +16,9 @@ The [client workspace portal](docs/CLIENT_PORTAL.md) is available at `/portal` o
 the control API. It uses a human API-audience token to read tenant projects,
 applications, release health/history, quotas, domains and private data services;
 owners and admins can submit the existing creation/provisioning/release requests.
+Tenant audit pagination is available to human members. Owners can manage one-time
+invitations, membership and application-scoped service grants; owners/admins can
+queue rollback to an eligible previous release.
 Token renewal and production login installation remain separate gates.
 
 ## Partner Platform integration and completion
