@@ -66,6 +66,10 @@ class IngressRuntime(unittest.TestCase):
                                           capture_output=True, timeout=10)
                 self.assertNotEqual(isolated.returncode, 0, "Separate application network resolved another tenant")
                 docker("run", "-d", "--name", ingress_container, "--network", "dial-runtime",
+                       # Only this disposable local upstream skips an inherited
+                       # outbound proxy; ACME and all other egress retain it.
+                       "-e", "NO_PROXY=" + os.environ.get("NO_PROXY", "") + "," + app_container,
+                       "-e", "no_proxy=" + os.environ.get("no_proxy", "") + "," + app_container,
                        "-p", f"127.0.0.1:{port}:443", "-v", str(root / "routes") + ":/routes:ro",
                        "-v", str(root / "certs") + ":/certs:ro",
                        os.environ["INGRESS_TEST_IMAGE"],

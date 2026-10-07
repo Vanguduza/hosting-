@@ -3,6 +3,7 @@
 import argparse
 import fcntl
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -113,12 +114,16 @@ def semantic_probe(instance):
 
 
 def check_object(instance, ip, mounted, probe):
+    # The address comes from the owned Docker network inspection. Keep this
+    # private semantic probe local; outbound Restic traffic retains its proxy.
+    if not ipaddress.ip_address(ip).is_private:
+        raise ValueError("Storage semantic probe requires a private Docker address")
     import boto3
     from botocore.config import Config
     client = boto3.client("s3", endpoint_url="http://" + ip + ":3900", region_name="garage",
                           aws_access_key_id=(mounted / "access_key").read_text(),
                           aws_secret_access_key=(mounted / "secret_key").read_text(),
-                          config=Config(signature_version="s3v4", s3={"addressing_style": "path"}))
+                          config=Config(signature_version="s3v4", s3={"addressing_style": "path"}, proxies={}))
     response = client.get_object(Bucket=bucket_name(instance), Key=probe["key"])
     if response["ContentLength"] != probe["size_bytes"]:
         raise RuntimeError("Storage semantic object length differs")

@@ -21,7 +21,9 @@ def s3(ip, key, secret):
     from botocore.config import Config
     return boto3.client("s3", endpoint_url=f"http://{ip}:3900", region_name="garage",
                         aws_access_key_id=key, aws_secret_access_key=secret,
-                        config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
+                        # This endpoint is our disposable Docker bridge fixture,
+                        # rather than an outbound HTTP destination.
+                        config=Config(signature_version="s3v4", s3={"addressing_style": "path"}, proxies={}),
                         use_ssl=False)
 
 

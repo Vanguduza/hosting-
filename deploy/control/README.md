@@ -1,5 +1,19 @@
 # Control plane local profile
 
+For a build environment using a custom HTTPS proxy CA, pass a combined trusted
+CA bundle as an optional BuildKit secret:
+
+```sh
+docker build --secret id=build_ca,src=/private/build-ca-bundle.pem \
+  -t dial-hosting-control:development services/api
+```
+
+Run this command from the repository root. The bundle is available only during
+dependency installation, is not copied into the image, and TLS verification
+stays enabled. For Compose, supply the same secret through a local build override;
+do not commit an environment CA or disable certificate validation. Runtime issuer,
+OpenBao and node trust configuration remains separate.
+
 This profile is a **private development environment** for the implemented organization/project API; it is not a production PaaS deployment. It does not start any named dependency from the full blueprint until its exact version and placement are admitted.
 
 1. Install a Docker Engine and Compose plugin on an isolated developer host.

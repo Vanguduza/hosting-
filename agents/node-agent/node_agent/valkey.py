@@ -1,6 +1,7 @@
 """One persistent, authenticated Valkey on a private per-resource Docker bridge."""
 import json
 import os
+import stat
 import re
 import socket
 import time
@@ -58,6 +59,36 @@ def probe(ip, password):
             raise OperationError("Valkey readiness receipt invalid")
 
 
+def acl_mount(node, instance, password):
+    directory = node.secrets_dir / "vk-acl"
+    directory.mkdir(mode=0o700, exist_ok=True)
+    if directory.is_symlink() or directory.stat().st_mode & 0o077:
+        raise OperationError("Valkey ACL directory unsafe")
+    path = directory / (instance + ".acl")
+    expected = "user default off\nuser dial_app on >" + password + \
+               " ~* &* +@read +@write +@connection +@pubsub -@dangerous\n"
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except FileNotFoundError:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "w") as file:
+            file.write(expected)
+            file.flush()
+            os.fchmod(file.fileno(), 0o444)
+            os.fsync(file.fileno())
+    else:
+        with os.fdopen(fd, "r") as file:
+            info = os.fstat(file.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or \
+                    info.st_size > 1024 or file.read(1025) != expected:
+                raise OperationError("Valkey ACL differs from immutable secret revision")
+            # Repair files created under a private umask by earlier agents.
+            # Only this read-only bind mount is readable by the container UID;
+            # the enclosing host directory stays private (0700).
+            os.fchmod(file.fileno(), 0o444)
+    return path
+
+
 def provision(node, data):
     if set(data) != {"instance_id", "application_id", "memory_mb", "cpu_milli", "secret_version"}:
         raise ValueError("Invalid Valkey operation")
@@ -73,6 +104,7 @@ def provision(node, data):
     container, network, volume = names(instance)
     with node.lock, node.file_lock():
         password = secret(node, instance, version)
+        acl = acl_mount(node, instance, password)
         existing = inspect(node, container)
         if existing:
             labels = existing.get("Config", {}).get("Labels", {})
@@ -105,25 +137,6 @@ def provision(node, data):
             if network_info and (network_info.get("Labels", {}).get("dial.valkey") != instance or
                                  network_info.get("Internal") is not True):
                 raise OperationError("Valkey network ownership mismatch")
-            acl_dir = node.secrets_dir / "vk-acl"
-            acl_dir.mkdir(mode=0o700, exist_ok=True)
-            if acl_dir.is_symlink() or acl_dir.stat().st_mode & 0o077:
-                raise OperationError("Valkey ACL directory unsafe")
-            acl = acl_dir / (instance + ".acl")
-            # ACL file lives under a root-only host directory. It is read-only
-            # inside the container, where Valkey's unprivileged UID must read it.
-            if acl.is_symlink():
-                raise OperationError("Valkey ACL path unsafe")
-            expected = "user default off\nuser dial_app on >" + password + \
-                       " ~* &* +@read +@write +@connection +@pubsub -@dangerous\n"
-            if acl.exists() and acl.read_text() != expected:
-                raise OperationError("Valkey ACL differs from immutable secret revision")
-            if not acl.exists():
-                fd = os.open(acl, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
-                with os.fdopen(fd, "w") as file:
-                    file.write(expected)
-                    file.flush()
-                    os.fsync(file.fileno())
             node.runner(["docker", "pull", image], 300)
             if not network_info:
                 node.runner(["docker", "network", "create", "--internal", "--label", "dial.valkey=" + instance,
