@@ -27,7 +27,11 @@ try {
     assert.equal(authorization.get('response_type'),'code');
     const state=authorization.get('state');
     assert.match(state,/^[A-Za-z0-9_-]{43}$/);
-    return route.fulfill({status:302,headers:{Location:config.redirect_uri+'?code=private-code&state='+state+'&iss='+encodeURIComponent(config.issuer)}});
+    // Playwright 1.55 intercepts only the initial request in an HTTP redirect
+    // chain. A hosted-login page performs a new navigation so both fixture
+    // origins stay intercepted; the portal still traverses the issuer origin.
+    const callback=config.redirect_uri+'?code=private-code&state='+state+'&iss='+encodeURIComponent(config.issuer);
+    return route.fulfill({status:200,contentType:'text/html',body:'<!doctype html><title>Issuer fixture</title><script>location.replace('+JSON.stringify(callback)+');</script>'});
   });
   await page.route('https://portal.example.test/**',async route=>{
     const request=route.request(),url=new URL(request.url()),pathname=url.pathname;
@@ -67,7 +71,11 @@ try {
   await page.locator('#sign-in').waitFor({state:'visible'});
   await page.locator('#sign-in').click();
   try { await page.locator('#workspace').waitFor({state:'visible'}); }
-  catch (error) { console.error(JSON.stringify({message:await page.locator('#message').textContent(),errors})); throw error; }
+  catch (error) {
+    const url = new URL(page.url());
+    console.error(JSON.stringify({page:url.origin+url.pathname,message:await page.locator('#message').textContent({timeout:1000}).catch(()=>null),errors}));
+    throw error;
+  }
   assert.equal(exchangeCount,1);
   assert.equal(page.url(),config.redirect_uri);
   assert.deepEqual(await page.evaluate(()=>({session:Object.keys(sessionStorage),local:Object.keys(localStorage)})),{session:[],local:[]});
