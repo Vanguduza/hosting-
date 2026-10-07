@@ -10,11 +10,31 @@ The private control API exposes its currently implemented OpenAPI 3.1 contract a
 
 `BUILD_READY=false`, `RUNTIME_QUALIFIED=false`, `PRODUCTION_QUALIFIED=false`. The repository contains authenticated tenant/project/application APIs with one-time owner-created team invitations; trusted-source build, scan, sign and digest admission; a signed GitHub push receiver and durable isolated builder for registered trusted sources with optional per-repository read-only deploy keys; private release scheduling and an mTLS Docker node agent; rollback and a durable worker with domain proof, Traefik HTTPS routing and public release probes; OpenBao KV v2 credential transport; dedicated private PostgreSQL and Valkey provisioning with application attachment; and a development-only private single-node Garage S3 resource. Operator-configured control/client PostgreSQL, Valkey and Garage backup tools use encrypted off-host Restic targets, isolated semantic restore drills, daily timers and hourly checks for fresh verified receipts and remote snapshot presence. Control and client PostgreSQL each have a distinct physical base backup with required WAL, PostgreSQL manifest verification and an isolated semantic restore. Separate [control](docs/CONTROL_PITR.md) and [managed-client](docs/MANAGED_POSTGRES_PITR.md) WAL streams upload completed segments off-host and drill selected point-in-time restores in disposable PostgreSQL containers. OpenBao Integrated Storage Raft has an off-host encrypted snapshot and guarded disposable-authority restore workflow; CI exercises it against separate disposable Raft servers. A per-host [encrypted recovery catalog](docs/RECOVERY_CATALOG.md) checks live inventory, verified receipts and remote snapshot provenance, publishes its own off-host Restic snapshot, and can be inspected independently on a recovery host. The GitHub path has disposable signed HTTP and database tests, but no live rootless build or private-source qualification. Public ingress and resource provisioning have code and disposable tests, but no live deployment qualification. A production OpenBao HA cluster and cross-host recovery, production object-store durability, PR previews, WAL/PITR installation and estate drills, credential rotation, managed Supabase, billing, provider IAM setup and the client portal have **not** been implemented or certified. A missing capability is omitted rather than represented by a fake route or green status.
 
-## Local control-plane verification
+## Client workspace
+
+The [client workspace portal](docs/CLIENT_PORTAL.md) is available at `/portal` on
+the control API. It uses a human API-audience token to read tenant projects,
+applications, release health/history, quotas, domains and private data services;
+owners and admins can submit the existing creation/provisioning/release requests.
+Token renewal and production login installation remain separate gates.
+
+## Partner Platform integration and completion
+
+This platform is the infrastructure authority for DIAL-built partner
+applications. The [Partner Platform contract](docs/PARTNER_PLATFORM_INTEGRATION.md)
+defines typed hosting desired state and preserves the business platform's
+commercial/domain authority. The contract remains specified; it does not enable
+a HostingIntent provisioning route or promote certification.
+
+See [the repository assessment](docs/REPOSITORY_ASSESSMENT.md) for branch/CI
+evidence, the current continuation and the remaining completion sequence.
+
+## Local checks
 
 ```bash
 python3 tools/packcheck.py
 python3 -m unittest discover -s tests -v
+node --test tests/test_portal_client.mjs
 docker compose -f deploy/control/compose.yaml --env-file deploy/control/.env up --build
 ```
 

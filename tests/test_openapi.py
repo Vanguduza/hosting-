@@ -15,6 +15,30 @@ from openapi_spec_validator import validate
 
 
 class ApiContractTests(unittest.TestCase):
+    def test_portal_assets_are_served_without_identity_but_do_not_bypass_api_auth(self):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+            for path in ("/portal", "/portal/portal.mjs", "/portal/portal.css"):
+                connection.request("GET", path)
+                response = connection.getresponse()
+                self.assertEqual(response.status, 200)
+                self.assertIn("frame-ancestors 'none'", response.getheader("Content-Security-Policy"))
+                self.assertTrue(response.read())
+            # No JWKS client is needed for static assets. Unauthorized API reads
+            # still enter authenticate, independently of the portal's browser UI.
+            server.jwks = None
+            connection.request("GET", "/v1/organizations")
+            response = connection.getresponse()
+            self.assertEqual(response.status, 401)
+            self.assertEqual(json.loads(response.read()), {"error": "unauthorized"})
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
     def test_public_contract_is_served_and_describes_real_auth_boundary(self):
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)

@@ -828,6 +828,10 @@ class Handler(BaseHTTPRequestHandler):
     def handle_request(self, method):
         parsed_url = urlsplit(self.path)
         path = parsed_url.path
+        if method == "GET":
+            from .portal import serve
+            if serve(self, path):
+                return
         if path == "/live" and method == "GET":
             return self.reply(200, {"status": "process_alive"})
         if path == "/openapi.json" and method == "GET":

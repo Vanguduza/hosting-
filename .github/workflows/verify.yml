@@ -6,6 +6,24 @@ on:
 permissions:
   contents: read
 jobs:
+  portal-browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --prefix /tmp/dial-portal-browser playwright@1.55.1
+      - run: /tmp/dial-portal-browser/node_modules/.bin/playwright install --with-deps chromium
+      - run: node tests/portal_browser.mjs
+        env:
+          PORTAL_PLAYWRIGHT_ROOT: /tmp/dial-portal-browser
+          PORTAL_SCREENSHOT_DIR: /tmp/dial-portal-screenshots
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: portal-browser-screenshots
+          path: /tmp/dial-portal-screenshots
   compose-startup:
     runs-on: ubuntu-latest
     steps:
@@ -15,6 +33,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -22,6 +43,7 @@ jobs:
       - run: python -m pip install --requirement services/api/requirements.txt
       - run: python -m pip install --requirement services/api/requirements-contracts.txt
       - run: python -m unittest discover -s tests -v
+      - run: node --test tests/test_portal_client.mjs
       - run: python -m pip wheel --no-deps ./sdk/python --wheel-dir /tmp/dial-sdk-wheel
       - run: python -m compileall -q services/api agents/node-agent tools sdk/python
       - run: sh -n deploy/control/install-audit-checkpoint.sh

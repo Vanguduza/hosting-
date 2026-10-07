@@ -19,6 +19,7 @@ class RecoveryCatalogContracts(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / "config.json"
             path.write_text("{}")
+            os.chmod(path, 0o644)
             with self.assertRaisesRegex(RuntimeError, "owner-only"):
                 load_config(path)
             os.chmod(path, 0o600)
