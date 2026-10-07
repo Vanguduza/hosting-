@@ -33,7 +33,10 @@ readback. Durable HostingIntent provisioning and qualification remain open.
 The [Zimbabwe launch and domain-registration recommendation](docs/ZIMBABWE_HOSTING_AND_DOMAINS.md)
 records `.co.zw` through a ZISPA member and `.com` through an OpenSRS reseller
 integration. Existing domain proof connects names already owned by customers;
-registrar purchases, renewals and their commercial workflow remain to be built.
+the [manual registration workflow](docs/DOMAIN_REGISTRATION.md) now lets owners
+request a name, review and approve an immutable quote, and observe audited
+operator fulfillment. Registrar account configuration, automatic ordering,
+renewals and production qualification remain open.
 
 See [the repository assessment](docs/REPOSITORY_ASSESSMENT.md) for branch/CI
 evidence, the current continuation and the remaining completion sequence.

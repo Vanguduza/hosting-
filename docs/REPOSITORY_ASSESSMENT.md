@@ -24,12 +24,20 @@ release submission and rollback. The resumed build adds paginated audit history,
 owner-managed invitation/membership/service-grant screens, invitation acceptance,
 private token redaction/clearing and stricter unauthorized/stream failure handling.
 It uses existing authenticated API contracts and adds no
-new database authority or infrastructure success state. Browser asset and client
+new deployment authority or infrastructure success state. Browser asset and client
 contract tests are included in CI. A [typed Partner HostingIntent preflight](PARTNER_PREFLIGHT.md)
 now validates all contract fields and compares authenticated project/environment,
 artifact-bound health, domain and service readback. It exposes unavailable commercial,
 profile, admin, secret and backup authority explicitly. Durable HostingIntent
 provisioning remains unimplemented.
+
+The next continuation implements [manual domain registration](DOMAIN_REGISTRATION.md):
+owner-only `.com`/`.co.zw` requests, immutable quotes and historical consent,
+exact quote approval, pre-processing cancellation and protected operator
+fulfillment. Migration 026 restricts API writes, enforces tenant row policies and
+duplicate purchase exclusion, and records transactional audit/outbox facts.
+Unknown registrar outcomes remain pending reconciliation. Actual registrar
+accounts, automatic ordering and renewals are not configured.
 
 Runtime verification found and corrected a private-umask Valkey ACL permission
 failure, added immutable retry repair, and made API/fixture Docker copies readable
@@ -67,9 +75,10 @@ DU-054, DU-055 and DU-058; their live/complete commercial requirements remain op
 
 ## Continuation verification
 
-Network and runtime access were restored. The Python suite runs 102 tests:
-68 pass without runtime fixtures and 34 integration checks skip in that invocation.
-All 22 disposable PostgreSQL integration tests pass separately. Twenty JavaScript
+Network and runtime access were restored. Before the registration continuation,
+the Python suite ran 102 tests: 68 passed without runtime fixtures and 34
+integration checks skipped in that invocation.
+All 22 disposable PostgreSQL integration tests passed separately. Twenty JavaScript
 client tests and the Chromium browser contract suite pass, including mobile layout,
 owner access, private tokens, audit paging, rollback and expired-session behavior.
 The recovery-catalog permission test is independent of inherited umask.
@@ -92,12 +101,21 @@ trailing whitespace and malformed top-level domain labels; its focused tests pas
 and its head checks are available from the draft PR. Pack consistency, compilation
 and whitespace checks also pass.
 
+The manual registration continuation passes 71 fixture-free Python tests (47
+runtime checks skip in that invocation), all 22 existing database tests and 13
+registration database/HTTP tests separately, and 21 JavaScript client tests.
+Chromium exercises request, quote review, consent, cancellation, tenant isolation,
+unavailable readback and mobile layout. Fresh Compose startup applies all 26
+migrations and refuses source/ledger drift. These local checks precede publication
+and final-head CI; the draft PR check results are authoritative for the pushed head.
+
 ## Remaining deployment inputs
 
 The owner expects Zimbabwean customers using `.co.zw` and `.com`, including new
 domain registrations. [The launch recommendation](ZIMBABWE_HOSTING_AND_DOMAINS.md)
 separates a ZISPA member registration workflow from an OpenSRS `.com` reseller
-integration. DNS proof already works; registrar ordering/renewal does not.
+integration. DNS proof and the audited manual registration workflow work;
+automatic registrar ordering, readback and renewal remain open.
 
 Production placement and host access, the real identity provider, production
 domains, registry/build credentials, independent encrypted backup targets and

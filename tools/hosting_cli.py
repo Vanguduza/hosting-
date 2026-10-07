@@ -12,6 +12,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPSHandler, HTTPHandler, HTTPRedirectHandler, Request, build_opener
 
+MAX_RESPONSE_BYTES = 1048576
+
 
 def private_file(value, label):
     fd = os.open(value, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
@@ -69,10 +71,10 @@ def call(base, path, token=None, body=None, ca_file=None, opener=None):
                       method="POST" if payload is not None else "GET")
     try:
         with opener.open(request, timeout=15) as response:
-            status, data = response.status, response.read(65537)
+            status, data = response.status, response.read(MAX_RESPONSE_BYTES + 1)
     except HTTPError as exc:
-        status, data = exc.code, exc.read(65537)
-    if len(data) > 65536:
+        status, data = exc.code, exc.read(MAX_RESPONSE_BYTES + 1)
+    if len(data) > MAX_RESPONSE_BYTES:
         raise ValueError("API response exceeds limit")
     result = json.loads(data)
     if not isinstance(result, dict):
@@ -96,6 +98,9 @@ def parser():
         "resume": ("org", "app", "reason"),
         "domain": ("org", "app"), "domain-register": ("org", "app", "hostname"),
         "domain-verify": ("org", "app"), "builds": ("org", "app"),
+        "registrations": ("org",), "registration-request": ("org", "hostname", "term_years", "registrant_ref"),
+        "registration-approve": ("org", "registration", "quote_id", "quote_sha256"),
+        "registration-cancel": ("org", "registration"),
         "releases": ("org", "app"), "health": ("org", "app"), "health-incidents": ("org", "app"),
         "release-queue": ("org", "app", "image", "port",
                                                      "health_path", "memory_mb", "cpu_milli"),
@@ -112,8 +117,8 @@ def parser():
     for name, fields in arguments.items():
         command = commands.add_parser(name)
         for field in fields:
-            command.add_argument(field, type=int if field in ("port", "memory_mb", "cpu_milli", "expires_hours") else str)
-        if name in ("team-invite", "release-queue", "rollback", "postgres-create", "valkey-create", "storage-create"):
+            command.add_argument(field, type=int if field in ("port", "memory_mb", "cpu_milli", "expires_hours", "term_years") else str)
+        if name in ("team-invite", "release-queue", "rollback", "postgres-create", "valkey-create", "storage-create", "registration-request"):
             command.add_argument("--idempotency-key", type=identifier)
         if name == "team-accept":
             command.add_argument("--invitation-file", required=True, help="Owner-only invitation token file")
@@ -130,6 +135,21 @@ def request_for(args):
     if name == "team-accept":
         return "/v1/team/invitations/accept", {"token": private_file(args.invitation_file, "Invitation token")}, None
     org = "/v1/organizations/" + identifier(args.org)
+    if name == "registrations" or name.startswith("registration-"):
+        path = org + "/domain-registrations"
+        if name == "registrations":
+            return path, None, None
+        if name == "registration-request":
+            key = args.idempotency_key or str(uuid.uuid4())
+            return path, {"idempotency_key": key, "hostname": args.hostname, "term_years": args.term_years,
+                          "registrant_ref": args.registrant_ref}, key
+        path += "/" + identifier(args.registration)
+        if name == "registration-cancel":
+            return path + "/cancel", {"confirm": "cancel_registration"}, None
+        if not re.fullmatch(r"[a-f0-9]{64}", args.quote_sha256):
+            raise ValueError("Quote hash required")
+        return path + "/approve", {"quote_id": identifier(args.quote_id), "quote_sha256": args.quote_sha256,
+                                   "confirm": "approve_registration_quote"}, None
     if name == "audit":
         if not 0 <= args.after <= 9223372036854775807:
             raise ValueError("Audit cursor out of range")

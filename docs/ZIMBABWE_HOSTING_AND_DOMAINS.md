@@ -5,9 +5,9 @@ provisioned accounts, purchased domains or placement certificates.
 
 ## Initial infrastructure
 
-Use the existing Netcup 8 GB machine as a control-plane candidate only after
-measurement and recovery admission. If a new provider is needed, Hetzner Cloud
-in Europe is a cost-oriented candidate. Keep workload/data nodes separate, and
+Recommend Hetzner Cloud as the default new infrastructure candidate. Retain the
+existing Netcup 8 GB machine as an optional control-plane candidate after
+measurement and recovery admission. Keep workload/data nodes separate, and
 compare latency from Zimbabwean fixed/mobile networks with a South African
 provider before selecting production placement. Do not place the whole product
 catalog on the control machine. Choose initial workload capacity from measured
@@ -28,7 +28,9 @@ Restore drills and external probes, rather than account creation, admit producti
 
 Support two independent customer journeys: connect an existing domain, or purchase
 and manage a new registration. The existing API/portal implements ownership proof
-and application routing for the former. It does not purchase or renew domains.
+and application routing for the former. The [manual registration workflow](DOMAIN_REGISTRATION.md)
+now implements tenant requests, immutable quotes, exact owner consent and audited
+operator fulfillment. It does not automatically purchase or renew domains.
 
 | Namespace | Recommended registration route | Required next input |
 | --- | --- | --- |
@@ -59,14 +61,17 @@ Domain registration authority must retain the customer's ownership. Keep identit
 documents in private access-controlled storage and refer to them by opaque IDs;
 never put them in browser receipts, audit payloads, Git or registrar diagnostics.
 
-## Required implementation before selling registrations
+## Registration progress and remaining qualification
 
-1. Persist tenant-scoped registration intent and registrar-backed availability/quote
-   receipts. Distinguish quotes from a domain reservation or purchase.
-2. Obtain explicit approval of the exact name, registrant, term, currency, initial
-   price, renewal price and terms. Bind payment/entitlement evidence to that quote.
-3. Queue a durable provider operation with a stable request ID. After timeout,
-   reconcile the provider's order before retrying; do not blindly repeat a purchase.
+1. Tenant-scoped requests, immutable quotes and retained opaque provider-evidence
+   references are implemented. Support must obtain real registrar availability
+   and pricing evidence; quotes are not reservations.
+2. Explicit approval of the exact name, registrant, term, currency, initial
+   price, annual renewal price and terms is implemented. Protected operators
+   must verify quote-bound payment evidence before processing.
+3. Durable manual operations with stable UUIDs, cancellation boundaries and
+   retained fulfillment receipts are implemented. Unknown outcomes remain
+   pending reconciliation. Automated registrar ordering/reconciliation is open.
 4. Record authoritative registrar readback, nameserver delegation and registrant
    verification. Only then mark registration completed. DNS existence alone is
    neither availability evidence nor registration/ownership evidence.
@@ -76,6 +81,6 @@ never put them in browser receipts, audit payloads, Git or registrar diagnostics
 6. Connect the acquired name through the existing DNS ownership and TLS lifecycle.
    Qualify `.com` and `.co.zw` independently against each registrar's failure paths.
 
-Provider accounts, domain purchases and automatic billing are not configured in
-this repository. Registration remains an implementation/qualification item; the
-development portal must not present a DNS proof request as a registrar purchase.
+Provider accounts, actual domain purchases and automatic billing are not configured
+in this repository. The manual development workflow is implemented; real registrar
+setup, automatic renewals and live qualification remain completion inputs.

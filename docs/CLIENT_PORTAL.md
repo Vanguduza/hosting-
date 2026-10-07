@@ -42,6 +42,12 @@ keys. A 401 clears authentication and requests reconnection.
   The rollback route repeats the existing admission and placement checks. An
   explicit new-release request rotates that route's retry key when redeploying
   the same specification is intentional.
+- Owners can request `.com` or `.co.zw` registration using a support-issued
+  registrant reference, review a current immutable quote, explicitly approve
+  its price and terms, and cancel before processing begins. The
+  [manual operator workflow](DOMAIN_REGISTRATION.md) supplies quotes and records
+  retained fulfillment receipts. Requests and approval do not purchase a name
+  or charge funds; registrar automation and renewals remain open.
 
 Release and resource requests keep the same idempotency key for the same
 application, route and specification throughout the connected session, including
@@ -55,6 +61,10 @@ If the first response is lost, a matching retry returns metadata without a token
 Revoke that invitation and start another to obtain a new usable capability.
 Machine grant creation has no idempotency key; inspect its readback after a
 transport interruption before trying another creation.
+Registration requests also retain their specification-bound retry key; starting
+a new registration request deliberately rotates it. Quote approval is bound to
+the exact current quote UUID and hash. Unavailable quote readback clears old terms
+and approval choices; changing the selected quote clears the consent checkbox.
 
 ## Browser boundaries
 

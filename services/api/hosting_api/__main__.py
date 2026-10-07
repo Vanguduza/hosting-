@@ -883,6 +883,10 @@ class Handler(BaseHTTPRequestHandler):
                         result = self.quotas(conn, uuid.UUID(match.group(1)), actor)
                     elif path == "/v1/team/invitations/accept" and method == "POST":
                         result = self.accept_invitation(conn, actor, body, request_id)
+                    elif match := re.fullmatch(r"/v1/organizations/([0-9a-f-]{36})/domain-registrations(?:/([0-9a-f-]{36})/(approve|cancel))?", path):
+                        from .registration import handle
+                        result = handle(self, conn, uuid.UUID(match.group(1)), actor, body, method,
+                                        match.group(3), uuid.UUID(match.group(2)) if match.group(2) else None)
                     elif match := re.fullmatch(r"/v1/organizations/([0-9a-f-]{36})/service-accounts(/revoke)?", path):
                         result = self.service_accounts(conn, uuid.UUID(match.group(1)), actor, body, method,
                                                        request_id, revoke=bool(match.group(2)))

@@ -148,14 +148,14 @@ class DatabaseIntegration(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             destination = Path(temporary) / "schema"
             shutil.copytree(ROOT / "services/api/schema", destination)
-            (destination / "026_rollback_probe.sql").write_text(
+            (destination / "027_rollback_probe.sql").write_text(
                 "CREATE TABLE hosting.rollback_probe(id integer);\n"
                 "SELECT 1 / 0;\n", encoding="utf-8")
             with psycopg.connect(self.admin, autocommit=True) as conn:
                 with self.assertRaises(psycopg.errors.DivisionByZero):
                     apply_migrations(conn, destination)
                 self.assertIsNone(conn.execute("SELECT to_regclass('hosting.rollback_probe')").fetchone()[0])
-                self.assertEqual(conn.execute("SELECT count(*) FROM hosting.schema_migrations").fetchone()[0], 25)
+                self.assertEqual(conn.execute("SELECT count(*) FROM hosting.schema_migrations").fetchone()[0], len(list((ROOT / "services/api/schema").glob("*.sql"))))
                 verify_migrations(conn)
 
     def test_node_enrollment_retry_cannot_duplicate_capacity_or_ingress(self):

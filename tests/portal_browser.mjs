@@ -17,6 +17,17 @@ const app = '44444444-4444-4444-8444-444444444444';
 const previousRelease = '55555555-5555-4555-8555-555555555555';
 const invitation = '66666666-6666-4666-8666-666666666666';
 const grant = '77777777-7777-4777-8777-777777777777';
+const registrationId = '88888888-8888-4888-8888-888888888888';
+const registrationQuoteId = '99999999-9999-4999-8999-999999999999';
+let registration = null, registrationOrg = '', registrationUnavailable = false;
+function quoteRegistration() {
+  registration.state = 'QUOTED';
+  registration.quote = {id: registrationQuoteId, sha256: 'c'.repeat(64), payload: {
+    quote_id: registrationQuoteId, hostname: registration.hostname, registrant_ref: registration.registrant_ref,
+    term_years: 1, renewal_term_years: 1, initial_amount_minor: 2500, renewal_amount_minor: 1500, currency: 'USD',
+    provider: 'ZISPA_MEMBER', registrar: 'Test Zimbabwe registrar', fulfillment_mode: 'MANUAL',
+    expires_at: new Date(Date.now()+60000).toISOString(), terms_text: '<img src=x onerror=alert(1)> Registration terms.'}};
+}
 const privateInvitation = 't'.repeat(43);
 const invitationKeys = new Set();
 const writes = [], errors = [];
@@ -48,7 +59,21 @@ try {
       const payload = request.postDataJSON();
       writes.push({path: pathname, body: payload});
       status = 202; body = {id: app, state: 'QUEUED', request_id: orgA};
-      if (pathname.endsWith('/team/invitations')) {
+      if (pathname.endsWith('/domain-registrations')) {
+        assert.equal(role, 'owner'); assert.equal(payload.term_years, 1);
+        assert.equal(payload.hostname, 'supplier.co.zw');
+        registrationOrg = pathname.split('/')[3];
+        registration = {id: registrationId, hostname: payload.hostname, registrant_ref: payload.registrant_ref,
+          term_years: 1, state: 'REQUESTED', quote: null, updated_at: new Date().toISOString()};
+        status = 201; body = {id: registrationId, state: 'REQUESTED', fulfillment_mode: 'MANUAL'};
+      } else if (pathname.includes('/domain-registrations/') && pathname.endsWith('/approve')) {
+        assert.equal(payload.quote_id, registrationQuoteId); assert.equal(payload.quote_sha256, 'c'.repeat(64));
+        assert.equal(payload.confirm, 'approve_registration_quote'); registration.state = 'APPROVED';
+        body = {id: registrationId, state: 'APPROVED', replayed: false}; status = 200;
+      } else if (pathname.includes('/domain-registrations/') && pathname.endsWith('/cancel')) {
+        assert.equal(payload.confirm, 'cancel_registration'); registration.state = 'CANCELLED';
+        body = {id: registrationId, state: 'CANCELLED', replayed: false}; status = 200;
+      } else if (pathname.endsWith('/team/invitations')) {
         const replayed = invitationKeys.has(payload.idempotency_key);
         invitationKeys.add(payload.idempotency_key);
         status = replayed ? 200 : 201;
@@ -71,6 +96,11 @@ try {
     else if (pathname === '/v1/organizations') body = {organizations: [
       {id: orgA, name: 'First workspace', role}, {id: orgB, name: 'Second workspace', role},
     ]};
+    else if (pathname.endsWith('/domain-registrations')) {
+      assert.equal(role, 'owner', 'Financial readback is owner-only');
+      body = {registrations: registration && registrationOrg === pathname.split('/')[3] ? [registration] : [], fulfillment_mode: 'MANUAL'};
+      if (registrationUnavailable) {status = 503; body = {error: 'unavailable'};}
+    }
     else if (pathname.endsWith('/projects')) body = {projects: [{id: project, name: '<img src=x onerror=alert(1)>'}]};
     else if (pathname.endsWith('/applications')) body = {applications: [{id: app, name: 'Partner storefront', environment: 'production', active_release_id: app}]};
     else if (pathname.endsWith('/audit')) body = url.searchParams.get('after') === '0'
@@ -110,6 +140,7 @@ try {
   assert.equal(await page.locator('#projects option').textContent(), '<img src=x onerror=alert(1)>');
   assert.equal(await page.locator('img').count(), 0);
   assert.equal(await page.locator('#access-panel').isVisible(), false);
+  assert.equal(await page.locator('#registration-panel').isVisible(), false);
   assert.equal(await page.locator('#audit-events tr').count(), 1);
   await page.locator('#audit-more').click();
   await page.waitForFunction(() => document.querySelectorAll('#audit-events tr').length === 2);
@@ -162,6 +193,37 @@ try {
   await page.setViewportSize({width: 1280, height: 900});
   await connect();
   assert.equal(await page.locator('#access-panel').isVisible(), true);
+  assert.equal(await page.locator('#registration-panel').isVisible(), true);
+  await page.locator('#registration-form input[name=hostname]').fill('supplier.co.zw');
+  await page.locator('#registration-form input[name=registrant_ref]').fill('registrant://customer-1');
+  await page.locator('#registration-form button').first().click();
+  await page.waitForFunction(() => document.getElementById('registrations').textContent.includes('REQUESTED'));
+  assert.equal(await page.locator('#registration-approve-form button').isDisabled(), true);
+  quoteRegistration();
+  await page.locator('#refresh').click();
+  await page.waitForFunction(() => document.getElementById('registration-quote-details').textContent.includes('USD 25.00'));
+  assert.equal(await page.locator('#registration-quote-details img').count(), 0);
+  await page.setViewportSize({width: 390, height: 844});
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  if (process.env.PORTAL_SCREENSHOT_DIR) await page.screenshot({path: path.join(process.env.PORTAL_SCREENSHOT_DIR, 'registration-mobile.png'), fullPage: true});
+  await page.setViewportSize({width: 1280, height: 900});
+  assert.equal(await page.locator('#registration-consent').isChecked(), false);
+  await page.locator('#registration-consent').check();
+  await page.locator('#registration-approve-form button').click();
+  await page.waitForFunction(() => document.getElementById('registrations').textContent.includes('APPROVED'));
+  assert.equal(await page.locator('#registration-consent').isChecked(), false);
+  await page.locator('#registration-cancel-form button').click();
+  await page.waitForFunction(() => document.getElementById('registrations').textContent.includes('CANCELLED'));
+  assert.equal(await page.locator('#registration-cancel-form button').isDisabled(), true);
+  quoteRegistration();
+  registrationUnavailable = true;
+  await page.locator('#refresh').click();
+  await page.waitForFunction(() => document.getElementById('registrations').textContent.includes('unavailable'));
+  assert.equal(await page.locator('#registration-approve-form button').isDisabled(), true);
+  assert.equal(await page.locator('#registration-quote-details').textContent(), 'No current quote selected.');
+  registrationUnavailable = false;
+  await page.locator('#refresh').click();
+  await page.waitForFunction(() => document.getElementById('registration-quote-details').textContent.includes('USD 25.00'));
   assert.equal(await page.locator('#remove-member-target option').count(), 1);
   assert.equal(await page.locator('#remove-member-target').inputValue(), 'viewer-subject');
   await page.locator('#invitation-form button[type=submit], #invitation-form button:not([type])').click();
@@ -171,6 +233,9 @@ try {
   await page.locator('#service-form input[name=client_id]').fill('previous-tenant-client');
   await page.locator('#service-form input[name=actor_sub]').fill('previous-tenant-subject');
   await page.locator('#organizations').selectOption(orgB);
+  await page.waitForFunction(() => document.getElementById('registrations').textContent.includes('No registration requests'));
+  assert.equal(await page.locator('#registration-quote-details').textContent(), 'No current quote selected.');
+  assert.equal(await page.locator('#registration-consent').isChecked(), false);
   await page.waitForFunction(() => document.getElementById('message').textContent === 'Readback updated.');
   assert.equal(await page.locator('#invitation-token').textContent(), '');
   assert.equal(await page.locator('#invitation-secret').isVisible(), false);
@@ -205,5 +270,5 @@ try {
   await page.locator('#connect-panel').waitFor();
   assert.match(await page.locator('#message').textContent(), /expired or is invalid/);
   assert.deepEqual(errors, []);
-  console.log('Portal browser contracts: PASS (roles, audit pagination, owner access, private invitation handling, rollback, tenant switch, retry, stale readback, disconnect, mobile and expired token)');
+  console.log('Portal browser contracts: PASS (roles, registrar quote request/consent/cancel, stale and tenant readback, audit pagination, owner access, private invitation handling, rollback, retry, disconnect, mobile and expired token)');
 } finally { await browser.close(); }

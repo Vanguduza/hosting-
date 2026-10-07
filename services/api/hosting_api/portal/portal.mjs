@@ -155,6 +155,28 @@ export class AuditPages {
   }
 }
 
+export function registrationQuote(request, now = Date.now()) {
+  const quote = request?.quote, payload = quote?.payload;
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+  if (request?.state !== 'QUOTED' || !uuid.test(request.id) || !uuid.test(quote?.id) ||
+      !/^[a-f0-9]{64}$/.test(quote?.sha256) || !payload || payload.quote_id !== quote.id ||
+      payload.hostname !== request.hostname || payload.registrant_ref !== request.registrant_ref ||
+      !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.(?:com|co\.zw)$/.test(payload.hostname) ||
+      /\s/.test(payload.hostname) || !/^registrant:\/\/[a-z0-9/_-]{1,120}$/.test(payload.registrant_ref) ||
+      /\s/.test(payload.registrant_ref) ||
+      payload.term_years !== request.term_years || !Number.isInteger(payload.term_years) ||
+      payload.term_years < 1 || payload.term_years > 5 ||
+      (payload.hostname.endsWith('.co.zw') && payload.term_years !== 1) || payload.renewal_term_years !== 1 ||
+      !Number.isSafeInteger(payload.initial_amount_minor) || payload.initial_amount_minor < 1 || payload.initial_amount_minor > 2147483647 ||
+      !Number.isSafeInteger(payload.renewal_amount_minor) || payload.renewal_amount_minor < 0 || payload.renewal_amount_minor > 2147483647 ||
+      !['USD','ZAR','ZWG'].includes(payload.currency) || payload.fulfillment_mode !== 'MANUAL' ||
+      payload.provider !== (payload.hostname.endsWith('.co.zw') ? 'ZISPA_MEMBER' : 'OPENSRS') ||
+      typeof payload.registrar !== 'string' || payload.registrar.length < 1 || payload.registrar.length > 128 ||
+      typeof payload.terms_text !== 'string' || payload.terms_text.length < 10 || payload.terms_text.length > 4000 ||
+      !Number.isFinite(Date.parse(payload.expires_at)) || Date.parse(payload.expires_at) <= now) return null;
+  return quote;
+}
+
 function bootstrap() {
   const $ = id => document.getElementById(id);
   const client = new ControlClient();
@@ -162,6 +184,7 @@ function bootstrap() {
   const audit = new AuditPages();
   let organizations = [], projects = [], applications = [];
   let members = [], invitations = [], grants = [];
+  let registrations = [];
   let generation = 0, busy = false;
   const element = (tag, text = '', className = '') => {
     const node = document.createElement(tag); node.textContent = text;
@@ -196,11 +219,13 @@ function bootstrap() {
   function clearPrivateReceipt() {
     $('receipt').textContent = 'No changes requested for this selection.';
     $('invitation-token').textContent = ''; $('invitation-secret').hidden = true;
-    for (const id of ['project-form','application-form','release-form','domain-form','resource-form','service-form','invitation-form','accept-form']) $(id).reset();
+    for (const id of ['project-form','application-form','release-form','domain-form','resource-form','service-form','invitation-form','accept-form','registration-form','registration-approve-form','registration-cancel-form']) $(id).reset();
+    showRegistrationQuote();
   }
   function clearOrganizationViews() {
     audit.reset($('organizations').value);
     members = []; invitations = []; grants = [];
+    clearRegistrations();
     for (const id of ['audit-events','members','invitations','service-accounts','remove-member-target','revoke-invitation-target','revoke-service-target']) $(id).replaceChildren();
     $('audit-state').textContent = 'Audit readback not loaded.';
     $('audit-more').hidden = true;
@@ -237,6 +262,9 @@ function bootstrap() {
     $('application-form').querySelector('button').disabled = !projects.length;
     const owner = canManageAccess(selectedRole()) && Boolean($('organizations').value);
     $('access-panel').hidden = !owner;
+    $('registration-panel').hidden = !owner;
+    $('registration-approve-form').querySelector('button').disabled = !registrations.some(row => row.id === $('registration-quote-target').value && registrationQuote(row));
+    $('registration-cancel-form').querySelector('button').disabled = !$('registration-cancel-target').value;
     $('service-form').querySelector('button').disabled = !$('applications').value;
     $('remove-member-form').querySelector('button').disabled = !members.some(member => ['admin','viewer'].includes(member.role));
     $('revoke-invitation-form').querySelector('button').disabled = !invitations.some(invite => invitationState(invite) === 'PENDING');
@@ -326,10 +354,47 @@ function bootstrap() {
   }
   async function loadOrganizationViews() {
     if (!$('organizations').value) return;
-    const results = await Promise.allSettled([loadAudit(), loadAccess()]);
+    const results = await Promise.allSettled([loadAudit(), loadAccess(), loadRegistrations()]);
     const failures = results.filter(result => result.status === 'rejected');
     const authFailure = failures.find(result => result.reason instanceof ApiError && result.reason.status === 401);
     if (failures.length) throw (authFailure || failures[0]).reason;
+  }
+  function money(payload, field = 'initial_amount_minor') {
+    return `${payload.currency} ${(payload[field] / 100).toFixed(2)}`;
+  }
+  function clearRegistrations() {
+    registrations = [];
+    for (const id of ['registrations','registration-quote-target','registration-cancel-target']) $(id).replaceChildren();
+    $('registration-quote-details').textContent = 'No current quote selected.';
+    $('registration-consent').checked = false;
+  }
+  function showRegistrationQuote() {
+    $('registration-consent').checked = false;
+    const row = registrations.find(item => item.id === $('registration-quote-target').value);
+    const quote = registrationQuote(row);
+    if (!quote) { $('registration-quote-details').textContent = 'No current quote selected.'; updateActions(); return; }
+    const p = quote.payload;
+    $('registration-quote-details').textContent = `Domain: ${p.hostname}\nRegistrant: ${p.registrant_ref}\nTerm: ${p.term_years} year(s)\nRegistrar: ${p.registrar}\nInitial total: ${money(p)}\nRenewal (1 year): ${money(p, 'renewal_amount_minor')}\nExpires: ${date(p.expires_at)}\nTerms:\n${p.terms_text}`;
+    updateActions();
+  }
+  async function loadRegistrations() {
+    if (!canManageAccess(selectedRole()) || !$('organizations').value) { clearRegistrations(); return; }
+    const organization = $('organizations').value, revision = generation;
+    try {
+      const data = await client.request(`${orgPath()}/domain-registrations`);
+      if (revision !== generation || organization !== $('organizations').value || !canManageAccess(selectedRole())) return;
+      registrations = list(data, 'registrations');
+      showRows('registrations', registrations, [row => row.hostname, row => row.state,
+        row => registrationQuote(row) ? money(row.quote.payload) : '—', row => date(row.updated_at)], 'No registration requests.');
+      options('registration-quote-target', registrations.filter(row => registrationQuote(row)), row => `${row.hostname} · ${money(row.quote.payload)}`);
+      options('registration-cancel-target', registrations.filter(row => ['REQUESTED','QUOTED','APPROVED'].includes(row.state)), row => `${row.hostname} · ${row.state}`);
+      showRegistrationQuote();
+    } catch (error) {
+      if (organization === $('organizations').value) {
+        clearRegistrations(); showRows('registrations', [], [row => row], 'Registration readback unavailable.');
+      }
+      throw error;
+    }
   }
   async function loadDetails() {
     clearDetails(); const current = generation;
@@ -416,6 +481,26 @@ function bootstrap() {
     await mutate(`${appPath()}/releases`, body, true); await loadDetails();
   });
   bind('domain-form', async body => { await mutate(`${appPath()}/domain`, body); await loadDetails(); });
+  bind('registration-form', async body => {
+    await mutate(`${orgPath()}/domain-registrations`, {...body, term_years: Number(body.term_years)}, true, true);
+    $('registration-form').reset(); await loadRegistrations();
+  });
+  $('new-registration').addEventListener('click', () => {
+    keys.resetRoute(`${orgPath()}/domain-registrations`);
+    message('New registration request prepared. Inspect existing requests before submitting again.');
+  });
+  $('registration-quote-target').addEventListener('change', showRegistrationQuote);
+  bind('registration-approve-form', async body => {
+    const row = registrations.find(item => item.id === body.registration_id), quote = registrationQuote(row);
+    if (!quote || !$('registration-consent').checked) throw new Error('Select a current quote and approve its displayed terms.');
+    await mutate(`${orgPath()}/domain-registrations/${row.id}/approve`, {quote_id: quote.id,
+      quote_sha256: quote.sha256, confirm: 'approve_registration_quote'}, false, true);
+    await loadRegistrations();
+  });
+  bind('registration-cancel-form', async body => {
+    await mutate(`${orgPath()}/domain-registrations/${body.registration_id}/cancel`, {confirm: 'cancel_registration'}, false, true);
+    await loadRegistrations();
+  });
   $('verify-domain').addEventListener('click', () => run(async () => { await mutate(`${appPath()}/domain/verify`, {}); await loadDetails(); }));
   bind('resource-form', async ({kind, memory_mb, cpu_milli}) => {
     await mutate(`${appPath()}/${kind}`, {memory_mb: Number(memory_mb), cpu_milli: Number(cpu_milli)}, true); await loadDetails();

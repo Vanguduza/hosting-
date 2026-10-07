@@ -11,15 +11,30 @@ import uuid
 from contextlib import redirect_stdout, redirect_stderr
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from unittest.mock import Mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT / "services/api"))
-from hosting_cli import call, main, origin, parser, private_file, request_for
+from hosting_cli import MAX_RESPONSE_BYTES, call, main, origin, parser, private_file, request_for
 from hosting_api.openapi import document
 
 
 class CliTests(unittest.TestCase):
+    def test_large_quote_readback_stays_bounded(self):
+        payload = json.dumps({"registrations": [{"terms_text": "x" * 4000} for _ in range(25)]}).encode()
+        response = Mock(status=200)
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        opener = Mock()
+        opener.open.return_value = response
+        response.read.return_value = payload
+        self.assertEqual(len(call("http://127.0.0.1:8080", "/ready", opener=opener)[1]["registrations"]), 25)
+        response.read.assert_called_once_with(MAX_RESPONSE_BYTES + 1)
+        response.read.return_value = b"x" * (MAX_RESPONSE_BYTES + 1)
+        with self.assertRaisesRegex(ValueError, "exceeds limit"):
+            call("http://127.0.0.1:8080", "/ready", opener=opener)
+
     def test_transport_rejects_nonlocal_http_and_redirects(self):
         for invalid in ("http://control.example:8080", "https://user:password@control.example:443",
                         "https://control.example:443/path", "https://control.example:443/?token=x"):
@@ -107,6 +122,8 @@ class CliTests(unittest.TestCase):
             "resume": [one, three, "Owner requested resume"],
             "domain": [one, three], "domain-register": [one, three, "app.example.org"],
             "domain-verify": [one, three], "builds": [one, three],
+            "registrations": [one], "registration-request": [one, "shop.co.zw", "1", "registrant://customer-1"],
+            "registration-approve": [one, two, three, "a" * 64], "registration-cancel": [one, two],
             "releases": [one, three], "release-queue": [one, three,
                 "registry.example/app@sha256:" + "a" * 64, "8080", "/health", "256", "250"],
             "rollback": [one, three, four], "postgres": [one, three],

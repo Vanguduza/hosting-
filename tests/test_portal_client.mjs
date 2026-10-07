@@ -1,10 +1,28 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {ControlClient, MutationKeys, ApiError, canManage, canManageAccess, AuditPages,
-  invitationState, visibleReceipt} from '../services/api/hosting_api/portal/portal.mjs';
+  invitationState, visibleReceipt, registrationQuote} from '../services/api/hosting_api/portal/portal.mjs';
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), {
   status, headers: {'Content-Type': 'application/json'},
+});
+
+test('registration approval requires current exact quoted intent and safe prices', () => {
+  const id = '11111111-1111-4111-8111-111111111111', quoteId = '22222222-2222-4222-8222-222222222222';
+  const request = {id, state: 'QUOTED', hostname: 'shop.co.zw', term_years: 1, registrant_ref: 'registrant://customer-1',
+    quote: {id: quoteId, sha256: 'a'.repeat(64), payload: {quote_id: quoteId, hostname: 'shop.co.zw',
+      term_years: 1, registrant_ref: 'registrant://customer-1', initial_amount_minor: 2500,
+      renewal_amount_minor: 1500, renewal_term_years: 1, currency: 'USD', registrar: 'Test member', provider: 'ZISPA_MEMBER',
+      fulfillment_mode: 'MANUAL', expires_at: new Date(Date.now()+60000).toISOString(), terms_text: 'Terms for a single-year registration.'}}};
+  assert.equal(registrationQuote(request), request.quote);
+  for (const patch of [{hostname:'other.co.zw'}, {term_years:2}, {initial_amount_minor:25.5},
+                       {initial_amount_minor:Number.MAX_SAFE_INTEGER+1}, {renewal_amount_minor:-1},
+                       {currency:'unknown'}, {quote_id:id}, {expires_at:'invalid'}, {expires_at:'2000-01-01T00:00:00Z'},
+                       {fulfillment_mode:'AUTOMATIC'}, {registrant_ref:'registrant://other'}, {renewal_term_years:2}]) {
+    assert.equal(registrationQuote({...request,quote:{...request.quote,payload:{...request.quote.payload,...patch}}}), null);
+  }
+  assert.equal(registrationQuote({...request,state:'APPROVED'}), null);
+  assert.equal(registrationQuote({...request,quote:{...request.quote,sha256:'bad'}}), null);
 });
 
 test('authentication is in the bearer header; requests omit cookies and refuse redirects', async () => {

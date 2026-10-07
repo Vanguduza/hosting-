@@ -56,6 +56,38 @@ def document():
                  ("id", "job_id", "state", "request_id"))
     org = "/v1/organizations/{organization_id}"
     app = org + "/applications/{application_id}"
+    registration_request = obj({"idempotency_key": UUID,
+        "hostname": {"type": "string", "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.(com|co\\.zw)$"},
+        "term_years": {"type": "integer", "minimum": 1, "maximum": 5},
+        "registrant_ref": {"type": "string", "pattern": "^registrant://[a-z0-9/_-]{1,120}$"}},
+        ("idempotency_key", "hostname", "term_years", "registrant_ref"))
+    registration_receipt = obj({"id": UUID, "state": STRING, "replayed": BOOL, "fulfillment_mode": {"const": "MANUAL"}}, ("id", "state"))
+    quote_payload = obj({"quote_id": UUID, "hostname": registration_request["properties"]["hostname"],
+        "term_years": registration_request["properties"]["term_years"],
+        "registrant_ref": registration_request["properties"]["registrant_ref"],
+        "registrar": {"type": "string", "minLength": 1, "maxLength": 128},
+        "provider": {"enum": ["OPENSRS", "ZISPA_MEMBER"]},
+        "initial_amount_minor": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+        "renewal_amount_minor": {"type": "integer", "minimum": 0, "maximum": 2147483647},
+        "renewal_term_years": {"const": 1}, "currency": {"enum": ["USD", "ZAR", "ZWG"]},
+        "expires_at": DATE, "terms_text": {"type": "string", "minLength": 10, "maxLength": 4000},
+        "provider_quote_ref": {"type": "string", "pattern": "^quote://[a-zA-Z0-9/_-]{1,120}$"},
+        "fulfillment_mode": {"const": "MANUAL"}},
+        ("quote_id", "hostname", "term_years", "registrant_ref", "registrar", "provider",
+         "initial_amount_minor", "renewal_amount_minor", "renewal_term_years", "currency", "expires_at",
+         "terms_text", "provider_quote_ref", "fulfillment_mode"))
+    digest = {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+    registration_readback = obj({"id": UUID,
+        **{name: registration_request["properties"][name] for name in ("hostname", "term_years", "registrant_ref")},
+        "state": {"enum": ["REQUESTED", "QUOTED", "APPROVED", "PROCESSING", "FULFILLMENT_RECORDED", "CANCELLED", "FAILED"]},
+        "created_at": DATE, "updated_at": DATE,
+        "approved_at": {"oneOf": [DATE, {"type": "null"}]},
+        "fulfilled_at": {"oneOf": [DATE, {"type": "null"}]},
+        "receipt_sha256": {"oneOf": [digest, {"type": "null"}]},
+        "quote": {"oneOf": [obj({"id": UUID, "sha256": digest, "payload": quote_payload},
+                                  ("id", "sha256", "payload")), {"type": "null"}]}},
+        ("id", "hostname", "term_years", "registrant_ref", "state", "created_at", "updated_at",
+         "approved_at", "fulfilled_at", "receipt_sha256", "quote"))
     paths = {
         "/live": {"get": operation("live", "Process liveness only", 200,
                                      obj({"status": {"const": "process_alive"}}, ("status",)), public=True)},
@@ -251,6 +283,22 @@ def document():
     }
     replay = response(obj({"id": UUID, "state": STRING, "replayed": {"const": True}},
                           ("id", "state", "replayed")), "Matching idempotent replay")
+    registrations = org + "/domain-registrations"
+    paths[registrations] = {
+        "get": operation("listDomainRegistrations", "Owner registration/quote/fulfillment readback", 200,
+            obj({"registrations": {**array(registration_readback), "maxItems": 25}, "fulfillment_mode": {"const": "MANUAL"}},
+                ("registrations", "fulfillment_mode"))),
+        "post": operation("requestDomainRegistration", "Request a registrar quote; no purchase", 201,
+            registration_receipt, registration_request,
+            description="Organization owners only. .co.zw uses a one-year term. Opaque registrant references exclude identity documents.")}
+    paths[registrations]["post"]["responses"]["200"] = response(registration_receipt, "Matching request replay")
+    paths[registrations + "/{registration_id}/approve"] = {"post": operation("approveRegistrationQuote",
+        "Approve the exact immutable quote; no payment is performed", 200, registration_receipt,
+        obj({"quote_id": UUID, "quote_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+             "confirm": {"const": "approve_registration_quote"}}, ("quote_id", "quote_sha256", "confirm")))}
+    paths[registrations + "/{registration_id}/cancel"] = {"post": operation("cancelDomainRegistration",
+        "Cancel before registrar processing starts", 200, registration_receipt,
+        obj({"confirm": {"const": "cancel_registration"}}, ("confirm",)))}
     for path in (app + "/releases", app + "/rollback", app + "/postgres", app + "/valkey", app + "/storage"):
         paths[path]["post"]["responses"]["200"] = replay
     paths[org + "/team/invitations"]["post"]["responses"]["200"] = response(
