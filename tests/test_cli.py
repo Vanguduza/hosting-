@@ -110,6 +110,29 @@ class CliTests(unittest.TestCase):
                 server.server_close()
                 worker.join(timeout=5)
 
+    def test_private_typed_intent_file_has_no_symlink_duplicate_or_permission_bypass(self):
+        from hosting_cli import intent_file
+        from tests.intent_fixtures import intent_fixture
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp)/'intent.json'
+            intent = intent_fixture()
+            path.write_text(json.dumps(intent))
+            os.chmod(path,0o600)
+            self.assertEqual(intent_file(path),intent)
+            org,app = str(uuid.uuid4()),str(uuid.uuid4())
+            args = parser().parse_args(['--base-url','https://control.example:443','intent-submit',org,app,'--intent-file',str(path)])
+            self.assertEqual(request_for(args),(f'/v1/organizations/{org}/applications/{app}/intents',{'intent':intent},None))
+            link = Path(temp)/'link'
+            link.symlink_to(path)
+            with self.assertRaises(OSError): intent_file(link)
+            os.chmod(path,0o644)
+            with self.assertRaises(ValueError): intent_file(path)
+            os.chmod(path,0o600)
+            path.write_text('{"schema_version":"1.0","schema_version":"2.0"}')
+            with self.assertRaises(ValueError): intent_file(path)
+            path.write_text(json.dumps({**intent,'secret_refs':['plaintext-password']}))
+            with self.assertRaises(ValueError): intent_file(path)
+
     def test_every_cli_command_maps_to_published_route(self):
         one, two, three, four = (str(uuid.uuid4()) for _ in range(4))
         samples = {
@@ -118,6 +141,7 @@ class CliTests(unittest.TestCase):
             "quotas": [one],
             "projects": [one], "project-create": [one, "alpha"],
             "applications": [one, two], "application-create": [one, two, "api", "production"],
+            "intents": [one, three], "intent": [one, three, four], "intent-reconcile": [one, three, four],
             "traffic": [one, three], "suspend": [one, three, "Owner requested pause"],
             "resume": [one, three, "Owner requested resume"],
             "domain": [one, three], "domain-register": [one, three, "app.example.org"],

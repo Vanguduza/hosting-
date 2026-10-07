@@ -54,6 +54,13 @@ requires the protected one-way required-assignment switch. Canonical commercial
 entitlement import, billing and offboarding remain open. This advances DU-004 and
 DU-046 while all readiness/acceptance flags remain false.
 
+The next continuation adds [durable Partner intent intake and reconciliation
+receipts](PARTNER_INTENTS.md): immutable tenant/application-bound requests,
+consistent hosting evidence, historical retry receipts, transactional audit/outbox
+and owner/admin portal/CLI readback. Migration 028 enforces payload/receipt
+validation, tenant access and immutable history. It advances intake and readback;
+automatic multi-resource provisioning and canonical authority remain open.
+
 Runtime verification found and corrected a private-umask Valkey ACL permission
 failure, added immutable retry repair, and made API/fixture Docker copies readable
 by their unprivileged users. Local private ingress/S3 probes retain local routing
@@ -141,6 +148,13 @@ tests (62 runtime tests skip in that invocation), 30 JavaScript tests and both
 browser proofs. OpenAPI advertises 34 paths / 45 operations. Fresh Compose startup
 expects 27 migrations and rejects schema drift. Required-assignment mode remains
 a protected installation step; no production flag is promoted by these tests.
+
+The durable intent continuation passes 12 dedicated disposable database tests,
+the 22 existing database tests, 13 registration tests and 15 entitlement tests.
+The fixture-free Python suite passes 91 tests, with 74 runtime checks skipped in
+that invocation (165 total); all 31 JavaScript tests and both browser proofs pass.
+OpenAPI advertises 37 paths / 49 operations, and fresh startup expects 28 migrations.
+These are software/fixture checks; all readiness and qualification flags remain false.
 
 ## Remaining deployment inputs
 

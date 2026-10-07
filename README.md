@@ -37,7 +37,10 @@ applications. The [Partner Platform contract](docs/PARTNER_PLATFORM_INTEGRATION.
 defines typed hosting desired state and preserves the business platform's
 commercial/domain authority. An executable [typed intent preflight](docs/PARTNER_PREFLIGHT.md)
 validates desired state and compares authenticated tenant/release/domain/service
-readback. Durable HostingIntent provisioning and qualification remain open.
+readback. [Durable intent intake and reconciliation receipts](docs/PARTNER_INTENTS.md)
+now preserve desired state, retries, audit history and actual hosting observations;
+owners/admins can recheck them through the portal or CLI. Automatic multi-resource
+provisioning, authoritative Partner bindings and qualification remain open.
 
 The [Zimbabwe launch and domain-registration recommendation](docs/ZIMBABWE_HOSTING_AND_DOMAINS.md)
 records `.co.zw` through a ZISPA member and `.com` through an OpenSRS reseller

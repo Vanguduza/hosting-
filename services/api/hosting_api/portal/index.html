@@ -32,6 +32,13 @@
         <section class="card"><h2>Domain & traffic</h2><div id="domain"></div><div id="traffic"></div></section>
       </div>
       <section class="card"><h2>Recent outages</h2><div id="incidents"></div></section>
+      <section id="intent-panel" class="card" hidden><h2>Hosting requests</h2>
+        <p class="hint">Review the requested application setup and its recorded checks. Recheck records a new observation. Deployment and commercial approval remain pending.</p>
+        <div class="table-wrap"><table><thead><tr><th>Template</th><th>Domain</th><th>Recorded state</th><th>Observed</th></tr></thead><tbody id="intents"></tbody></table></div>
+        <form id="intent-form"><label>Request to check<select id="intent-target" name="intent_id" required></select></label><button>Recheck this request</button></form>
+        <p id="intent-observed" class="hint">No recorded observation selected.</p>
+        <div class="table-wrap"><table><thead><tr><th>Check</th><th>Recorded state</th><th>Reason</th></tr></thead><tbody id="intent-stages"></tbody></table></div>
+      </section>
       <section id="registration-panel" class="card" hidden><h2>Buy a domain</h2>
         <p class="hint">Owners can request .com or .co.zw registration quotes. Registrar fulfillment is handled by an operator. A request or approval does not register a domain or charge your account.</p>
         <form id="registration-form"><div class="columns"><label>Domain name<input name="hostname" required maxlength="69" placeholder="yourbusiness.co.zw" autocomplete="off"></label><label>Registration term<select name="term_years"><option value="1">1 year</option><option value="2">2 years (.com)</option><option value="3">3 years (.com)</option><option value="4">4 years (.com)</option><option value="5">5 years (.com)</option></select></label></div><label>Registrant profile reference<input name="registrant_ref" required maxlength="133" placeholder="registrant://profile-reference" autocomplete="off"></label><p class="hint">Support supplies this reference after checking the customer's ownership details. Keep identity documents and personal details off this form.</p><button>Request a registration quote</button><button id="new-registration" type="button">Start a new registration request</button></form>

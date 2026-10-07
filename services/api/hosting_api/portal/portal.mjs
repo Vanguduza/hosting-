@@ -208,6 +208,29 @@ export function registrationQuote(request, now = Date.now()) {
   return quote;
 }
 
+export function intentObservation(row, appId) {
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+  const evaluation = row?.evaluation, receipt = evaluation?.receipt;
+  const stages = ['intake','commercial_authority','profile_qualification','tenant_admin_bindings','secret_bindings',
+    'backups','tenant_project_environment','hosting_plan','artifact_admission','runtime_placement','domain_ownership',
+    'route_tls','postgres','storage','resource_budget','release_health','observability'];
+  if (!uuid.test(row?.id) || row.application_id !== appId || row.state !== 'RECORDED' ||
+      !/^[a-f0-9]{64}$/.test(row.intent_sha256) || typeof row.desired?.template_id !== 'string' ||
+      typeof row.desired?.template_version !== 'string' || typeof row.desired?.domain_intent?.hostname !== 'string' ||
+      !uuid.test(evaluation?.id) || !Number.isSafeInteger(evaluation.revision) || evaluation.revision < 1 ||
+      receipt?.request_id !== row.id || receipt.intent_sha256 !== row.intent_sha256 ||
+      receipt.controller_version !== 'hosting-readback-v1' || receipt.state !== 'NOT_QUALIFIED' ||
+      receipt.resource_mutations_performed !== false || !Array.isArray(receipt.transformations) || receipt.transformations.length ||
+      typeof receipt.observed_at !== 'string' || !/([+-][0-9]{2}:[0-9]{2}|Z)$/.test(receipt.observed_at) || !Number.isFinite(Date.parse(receipt.observed_at)) ||
+      !Array.isArray(receipt.stages) || receipt.stages.length !== stages.length ||
+      receipt.stages.some((stage, index) => stage?.stage !== stages[index] ||
+        !['RECORDED','MATCHED','OBSERVED','OBSERVED_HEALTHY','BLOCKED','NOT_REQUESTED'].includes(stage.state) ||
+        typeof stage.reason !== 'string' || !stage.reason || stage.reason.length > 500)) {
+    throw new Error('Hosting request observation is unavailable.');
+  }
+  return receipt;
+}
+
 function bootstrap() {
   const $ = id => document.getElementById(id);
   const client = new ControlClient();
@@ -219,7 +242,7 @@ function bootstrap() {
   const audit = new AuditPages();
   let organizations = [], projects = [], applications = [];
   let members = [], invitations = [], grants = [];
-  let registrations = [];
+  let registrations = [], intents = [];
   let generation = 0, busy = false;
   const element = (tag, text = '', className = '') => {
     const node = document.createElement(tag); node.textContent = text;
@@ -247,14 +270,15 @@ function bootstrap() {
     if (values.some(value => value.id === previous)) select.value = previous;
   }
   function clearDetails() {
-    for (const id of ['quota','entitlements','health','resources','domain','traffic','incidents','releases','dns-proof']) $(id).replaceChildren();
+    for (const id of ['quota','entitlements','health','resources','domain','traffic','incidents','releases','dns-proof','intents','intent-target','intent-stages']) $(id).replaceChildren();
+    intents = []; $('intent-observed').textContent = 'No recorded observation selected.';
     $('release-count').textContent = ''; $('dns-proof').hidden = true;
     $('rollback-target').replaceChildren();
   }
   function clearPrivateReceipt() {
     $('receipt').textContent = 'No changes requested for this selection.';
     $('invitation-token').textContent = ''; $('invitation-secret').hidden = true;
-    for (const id of ['project-form','application-form','release-form','domain-form','resource-form','service-form','invitation-form','accept-form','registration-form','registration-approve-form','registration-cancel-form']) $(id).reset();
+    for (const id of ['project-form','application-form','release-form','domain-form','resource-form','service-form','invitation-form','accept-form','registration-form','registration-approve-form','registration-cancel-form','intent-form']) $(id).reset();
     showRegistrationQuote();
   }
   function clearOrganizationViews() {
@@ -294,6 +318,8 @@ function bootstrap() {
     $('create-panel').hidden = !manage || !$('organizations').value;
     $('manage-panel').hidden = !manage || !$('applications').value;
     $('rollback-panel').hidden = !manage || !$('applications').value;
+    $('intent-panel').hidden = !manage || !$('applications').value;
+    $('intent-form').querySelector('button').disabled = !intents.some(row => row.id === $('intent-target').value);
     $('application-form').querySelector('button').disabled = !projects.length;
     const owner = canManageAccess(selectedRole()) && Boolean($('organizations').value);
     $('access-panel').hidden = !owner;
@@ -431,6 +457,24 @@ function bootstrap() {
       throw error;
     }
   }
+  function showIntent() {
+    $('intent-stages').replaceChildren();
+    const row = intents.find(item => item.id === $('intent-target').value);
+    if (!row) { $('intent-observed').textContent = 'No recorded observation selected.'; updateActions(); return; }
+    const receipt = intentObservation(row, $('applications').value);
+    $('intent-observed').textContent = `Recorded observation: ${date(receipt.observed_at)} · ${receipt.state}. Refresh and recheck to observe again.`;
+    for (const stage of receipt.stages) {
+      const line = element('tr'), state = element('td'); state.append(badge(stage.state));
+      const labels = {intake:'Request',commercial_authority:'Commercial approval',profile_qualification:'Supported setup',
+        tenant_admin_bindings:'Administrator access',secret_bindings:'Application secrets',backups:'Backups',
+        tenant_project_environment:'Project and environment',hosting_plan:'Hosting plan',artifact_admission:'Application version',
+        runtime_placement:'Server placement',domain_ownership:'Domain ownership',route_tls:'Secure domain access',
+        postgres:'Database',storage:'File storage',resource_budget:'Capacity budget',release_health:'Application health',observability:'Monitoring'};
+      line.append(element('td', labels[stage.stage]), state, element('td', stage.reason));
+      $('intent-stages').append(line);
+    }
+    updateActions();
+  }
   async function loadDetails() {
     clearDetails(); const current = generation;
     const jobs = [];
@@ -439,6 +483,7 @@ function bootstrap() {
       ['health','health'], ['releases','releases'], ['domain','domain'], ['traffic','traffic'],
       ['postgres','postgres'], ['valkey','valkey'], ['storage','storage'], ['incidents','health/incidents']
     ]) jobs.push([id, `${appPath()}/${suffix}`]);
+    if ($('applications').value && canManage(selectedRole())) jobs.push(['intents', `${appPath()}/intents`]);
     const results = await Promise.allSettled(jobs.map(async ([id, path]) => [id, await client.request(path)]));
     if (current !== generation) return;
     const authFailure = results.find(result => result.status === 'rejected' && result.reason instanceof ApiError && result.reason.status === 401);
@@ -451,7 +496,24 @@ function bootstrap() {
         $(target).append(element('p', `${id}: readback unavailable`, 'hint')); continue;
       }
       const [, data] = result.value;
-      if (id === 'quota') {
+      if (id === 'intents') {
+        try {
+          const rows = list(data, 'intents');
+          if (rows.length > 50 || new Set(rows.map(row => row.id)).size !== rows.length) throw new Error();
+          for (const row of rows) intentObservation(row, $('applications').value);
+          intents = rows;
+        } catch { failures++; $('intents').append(element('p', 'Hosting requests: readback unavailable', 'hint')); continue; }
+        options('intent-target', intents, row => `${row.desired.template_id} ${row.desired.template_version} · ${row.desired.domain_intent.hostname}`);
+        if (!intents.length) {
+          const row = element('tr'), cell = element('td', 'No hosting requests recorded.'); cell.colSpan = 4; row.append(cell); $('intents').append(row);
+        }
+        for (const intent of intents) {
+          const row = element('tr'), state = element('td'); state.append(badge(intent.evaluation.receipt.state));
+          row.append(element('td', `${intent.desired.template_id} ${intent.desired.template_version}`), element('td', intent.desired.domain_intent.hostname), state, element('td', date(intent.evaluation.receipt.observed_at)));
+          $('intents').append(row);
+        }
+        showIntent();
+      } else if (id === 'quota') {
         const reserved = data.reserved;
         $('quota').append(element('div', `${reserved.memory_mb} MB / ${reserved.cpu_milli} millicores`, 'stat'),
           element('p', data.quota ? `Ceiling: ${data.quota.memory_mb_limit} MB / ${data.quota.cpu_milli_limit} millicores` : 'No tenant reservation ceiling configured.', 'hint'));
@@ -539,6 +601,18 @@ function bootstrap() {
   bind('release-form', async body => {
     for (const field of ['port','memory_mb','cpu_milli']) body[field] = Number(body[field]);
     await mutate(`${appPath()}/releases`, body, true); await loadDetails();
+  });
+  $('intent-target').addEventListener('change', showIntent);
+  bind('intent-form', async body => {
+    const row = intents.find(item => item.id === body.intent_id);
+    if (!row) throw new Error('Select a recorded hosting request.');
+    const path = `${appPath()}/intents/${body.intent_id}/reconcile`;
+    const key = keys.forRequest(path, {});
+    const data = await mutate(path, {}, true);
+    if (typeof data.replayed !== 'boolean' || data.evaluation?.id !== key) throw new Error('Hosting request observation is unavailable.');
+    intentObservation({...row,evaluation:data.evaluation}, $('applications').value);
+    keys.resetRoute(path);
+    await loadDetails();
   });
   bind('domain-form', async body => { await mutate(`${appPath()}/domain`, body); await loadDetails(); });
   bind('registration-form', async body => {

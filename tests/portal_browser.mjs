@@ -33,6 +33,18 @@ const invitationKeys = new Set();
 const writes = [], errors = [];
 let role = 'admin', unavailable = false, expired = false, removedMember = false, revokedInvite = false, revokedGrant = false;
 let planStatus = 'ACTIVE';
+const intentId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+let intentUnavailable = false, intentMalformed = false, intentBadAcknowledgement = false;
+const intentWrites = [];
+const intentEvaluations = new Map();
+const intentStages = ['intake','commercial_authority','profile_qualification','tenant_admin_bindings','secret_bindings',
+  'backups','tenant_project_environment','hosting_plan','artifact_admission','runtime_placement','domain_ownership',
+  'route_tls','postgres','storage','resource_budget','release_health','observability'];
+const hostingIntent = {id:intentId,application_id:app,state:'RECORDED',intent_sha256:'d'.repeat(64),
+  desired:{template_id:'supplier',template_version:'1.0',domain_intent:{hostname:'supplier.co.zw'}},
+  evaluation:{id:orgA,revision:1,receipt:{controller_version:'hosting-readback-v1',request_id:intentId,intent_sha256:'d'.repeat(64),
+    state:'NOT_QUALIFIED',observed_at:'2026-10-07T00:00:00Z',resource_mutations_performed:false,transformations:[],
+    stages:intentStages.map(stage => ({stage,state:'BLOCKED',reason:'<img src=x onerror=alert(1)> Evidence is missing.'}))}}};
 const auditEvent = (id, previous_hash, event_hash) => ({id, previous_hash, event_hash,
   actor_sub: 'owner-subject', action: 'project.create', resource_id: project,
   request_id: orgA, created_at: '2026-10-07T00:00:00Z'});
@@ -62,6 +74,19 @@ try {
     let body = {}, status = 200;
     if (request.method() === 'POST') {
       const payload = request.postDataJSON();
+      if (pathname.endsWith(`/intents/${intentId}/reconcile`)) {
+        assert.ok(['owner','admin'].includes(role));
+        assert.deepEqual(Object.keys(payload),['idempotency_key']);
+        intentWrites.push(payload);
+        const replayed = intentEvaluations.has(payload.idempotency_key);
+        if (!replayed) {
+          hostingIntent.evaluation = {...hostingIntent.evaluation,id:payload.idempotency_key,revision:hostingIntent.evaluation.revision+1,
+            receipt:{...hostingIntent.evaluation.receipt,observed_at:'2026-10-07T01:00:00Z'}};
+          intentEvaluations.set(payload.idempotency_key,hostingIntent.evaluation);
+        }
+        const evaluation = intentEvaluations.get(payload.idempotency_key);
+        return route.fulfill({status:replayed?200:201,json:{evaluation:intentBadAcknowledgement?{...evaluation,id:orgB}:evaluation,replayed}});
+      }
       writes.push({path: pathname, body: payload});
       status = 202; body = {id: app, state: 'QUEUED', request_id: orgA};
       if (pathname.endsWith('/domain-registrations')) {
@@ -105,6 +130,12 @@ try {
       assert.equal(role, 'owner', 'Financial readback is owner-only');
       body = {registrations: registration && registrationOrg === pathname.split('/')[3] ? [registration] : [], fulfillment_mode: 'MANUAL'};
       if (registrationUnavailable) {status = 503; body = {error: 'unavailable'};}
+    }
+    else if (pathname.endsWith('/intents')) {
+      assert.ok(['owner','admin'].includes(role),'Viewer must not load private intent observations');
+      body = {intents: pathname.split('/')[3] === orgA ? [hostingIntent] : []};
+      if (intentUnavailable) {status=503;body={error:'unavailable'};}
+      if (intentMalformed) body={intents:[{...hostingIntent,evaluation:{...hostingIntent.evaluation,receipt:{...hostingIntent.evaluation.receipt,state:'QUALIFIED'}}}]};
     }
     else if (pathname.endsWith('/projects')) body = {projects: [{id: project, name: '<img src=x onerror=alert(1)>'}]};
     else if (pathname.endsWith('/applications')) body = {applications: [{id: app, name: 'Partner storefront', environment: 'production', active_release_id: app}]};
@@ -156,6 +187,22 @@ try {
   assert.equal(await page.locator('img').count(), 0);
   assert.equal(await page.locator('#access-panel').isVisible(), false);
   assert.equal(await page.locator('#registration-panel').isVisible(), false);
+  assert.equal(await page.locator('#intent-panel').isVisible(), true);
+  assert.equal(await page.locator('#intent-stages tr').count(), 17);
+  assert.match(await page.locator('#intent-observed').textContent(), /Recorded observation:.*NOT_QUALIFIED/);
+  assert.match(await page.locator('#intent-stages').textContent(), /<img src=x onerror=alert\(1\)>/);
+  await page.locator('#intent-form button').click();
+  await page.waitForFunction(() => document.getElementById('message').textContent === 'Readback updated.');
+  await page.locator('#intent-form button').click();
+  await page.waitForFunction(() => document.getElementById('message').textContent === 'Readback updated.');
+  assert.notEqual(intentWrites[0].idempotency_key,intentWrites[1].idempotency_key,'Acknowledged rechecks use new observation keys');
+  intentBadAcknowledgement = true;
+  await page.locator('#intent-form button').click();
+  await page.waitForFunction(() => document.getElementById('message').textContent === 'Hosting request observation is unavailable.');
+  intentBadAcknowledgement = false;
+  await page.locator('#intent-form button').click();
+  await page.waitForFunction(() => document.getElementById('message').textContent === 'Readback updated.');
+  assert.equal(intentWrites[2].idempotency_key,intentWrites[3].idempotency_key,'Uncertain acknowledgement retains the original observation key');
   assert.equal(await page.locator('#audit-events tr').count(), 1);
   await page.locator('#audit-more').click();
   await page.waitForFunction(() => document.querySelectorAll('#audit-events tr').length === 2);
@@ -163,6 +210,9 @@ try {
   assert.equal(await page.locator('#rollback-target').inputValue(), previousRelease);
   await page.locator('#organizations').selectOption(orgB);
   await page.waitForFunction(() => document.getElementById('message').textContent === 'Readback updated.');
+  assert.equal(await page.locator('#intent-stages tr').count(), 0);
+  assert.equal(await page.locator('#intent-form button').isDisabled(),true);
+  assert.equal(await page.locator('#intent-observed').textContent(),'No recorded observation selected.');
   await page.locator('#release-form input[name=image]').fill('registry.test/web@sha256:'+'b'.repeat(64));
   await page.locator('#release-form button').click();
   await page.waitForFunction(() => document.getElementById('message').textContent === 'Readback updated.');
@@ -203,6 +253,7 @@ try {
   assert.equal(await page.locator('#create-panel').isVisible(), false);
   assert.equal(await page.locator('#manage-panel').isVisible(), false);
   assert.equal(await page.locator('#access-panel').isVisible(), false);
+  assert.equal(await page.locator('#intent-panel').isVisible(), false);
   assert.equal(await page.evaluate(() => localStorage.length + sessionStorage.length), 0);
   await page.setViewportSize({width: 390, height: 844});
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
@@ -215,6 +266,19 @@ try {
   await page.setViewportSize({width: 1280, height: 900});
   await connect();
   assert.equal(await page.locator('#access-panel').isVisible(), true);
+  assert.equal(await page.locator('#intent-stages tr').count(),17);
+  for (const malformed of [false,true]) {
+    intentUnavailable = !malformed; intentMalformed = malformed;
+    await page.locator('#refresh').click();
+    await page.waitForFunction(() => document.getElementById('message').textContent.includes('readbacks are unavailable'));
+    assert.equal(await page.locator('#intent-stages tr').count(),0);
+    assert.equal(await page.locator('#intent-form button').isDisabled(),true);
+    assert.equal(await page.locator('#intent-observed').textContent(),'No recorded observation selected.');
+    assert.match(await page.locator('#intents').textContent(),/unavailable/);
+  }
+  intentUnavailable = false; intentMalformed = false;
+  await page.locator('#refresh').click();
+  await page.waitForFunction(() => document.getElementById('message').textContent === 'Readback updated.');
   assert.equal(await page.locator('#registration-panel').isVisible(), true);
   await page.locator('#registration-form input[name=hostname]').fill('supplier.co.zw');
   await page.locator('#registration-form input[name=registrant_ref]').fill('registrant://customer-1');
@@ -287,10 +351,17 @@ try {
   await page.waitForFunction(() => document.getElementById('message').textContent === 'Readback updated.');
   assert.equal(await page.locator('#accept-form input').inputValue(), '');
   assert.match(await page.locator('#receipt').textContent(), /JOINED/);
+  await page.setViewportSize({width:390,height:844});
+  assert.equal(await page.locator('#intent-panel').isVisible(),true);
+  assert.equal(await page.locator('#intent-stages tr').count(),17);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),true);
+  if (process.env.PORTAL_SCREENSHOT_DIR) {
+    await page.locator('#intent-panel').screenshot({path:path.join(process.env.PORTAL_SCREENSHOT_DIR,'portal-intent-mobile.png')});
+  }
   expired = true;
   await page.locator('#refresh').click();
   await page.locator('#connect-panel').waitFor();
   assert.match(await page.locator('#message').textContent(), /expired or is invalid/);
   assert.deepEqual(errors, []);
-  console.log('Portal browser contracts: PASS (roles, registrar quote request/consent/cancel, stale and tenant readback, audit pagination, owner access, private invitation handling, rollback, retry, disconnect, mobile and expired token)');
+  console.log('Portal browser contracts: PASS (roles, durable intent observations/rechecks/clearing, registrar quote request/consent/cancel, stale and tenant readback, audit pagination, owner access, private invitation handling, rollback, retry, disconnect, mobile and expired token)');
 } finally { await browser.close(); }

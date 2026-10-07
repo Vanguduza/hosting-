@@ -854,10 +854,19 @@ class Handler(BaseHTTPRequestHandler):
             if identity.client_id and not service_route_allowed(path, method):
                 return self.reply(404, {"error": "not_found"})
             if method == "POST":
+                intent_route = bool(re.fullmatch(r'/v1/organizations/[0-9a-f-]{36}/applications/[0-9a-f-]{36}/intents(?:/[0-9a-f-]{36}/reconcile)?',path))
                 length = int(self.headers.get("Content-Length", "0"))
-                if length < 1 or length > 8192:
+                if length < 1 or length > (65536 if intent_route else 8192):
                     return self.reply(413, {"error": "body_size"})
-                body = json.loads(self.rfile.read(length))
+                if intent_route:
+                    if len(self.headers.get_all('Content-Length',[]))!=1 or self.headers.get('Transfer-Encoding'):
+                        return self.reply(400,{'error':'invalid_request'})
+                    if self.headers.get('Content-Type','').split(';',1)[0].strip().lower()!='application/json':
+                        return self.reply(415,{'error':'unsupported_media_type'})
+                    from .intent_contract import unique_object
+                    body = json.loads(self.rfile.read(length),object_pairs_hook=unique_object)
+                else:
+                    body = json.loads(self.rfile.read(length))
                 if not isinstance(body, dict):
                     return self.reply(400, {"error": "invalid_body"})
             else:
@@ -954,6 +963,10 @@ class Handler(BaseHTTPRequestHandler):
                     elif match := re.fullmatch(r"/v1/organizations/([0-9a-f-]{36})/applications/([0-9a-f-]{36})/storage", path):
                         result = self.storage(conn, uuid.UUID(match.group(1)), uuid.UUID(match.group(2)),
                                               actor, body, method, request_id)
+                    elif match := re.fullmatch(r'/v1/organizations/([0-9a-f-]{36})/applications/([0-9a-f-]{36})/intents(?:/([0-9a-f-]{36})(/reconcile)?)?',path):
+                        from .partner_intents import handle as intent_request
+                        result = intent_request(self,conn,uuid.UUID(match.group(1)),uuid.UUID(match.group(2)),actor,body,method,
+                                                uuid.UUID(match.group(3)) if match.group(3) else None,bool(match.group(4)))
                     elif match := re.fullmatch(r"/v1/organizations/([0-9a-f-]{36})/applications/([0-9a-f-]{36})/builds", path):
                         result = self.builds(conn, uuid.UUID(match.group(1)), uuid.UUID(match.group(2)),
                                              actor, method)
@@ -979,7 +992,7 @@ class Handler(BaseHTTPRequestHandler):
         except psycopg.errors.UniqueViolation:
             return self.reply(409, {"error": "conflict"})
         except psycopg.errors.RaiseException as exc:
-            if exc.diag.message_primary in ('quota_exceeded', 'entitlement_unavailable', 'entitlement_limit_exceeded'):
+            if exc.diag.message_primary in ('quota_exceeded', 'entitlement_unavailable', 'entitlement_limit_exceeded','intent_binding_conflict'):
                 return self.reply(409, {"error": exc.diag.message_primary})
             return self.reply(503, {"error": "unavailable"})
         except Exception:

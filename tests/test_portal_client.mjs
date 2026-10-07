@@ -1,10 +1,34 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {ControlClient, MutationKeys, ApiError, canManage, canManageAccess, AuditPages,
-  invitationState, visibleReceipt, registrationQuote, entitlementView} from '../services/api/hosting_api/portal/portal.mjs';
+  invitationState, visibleReceipt, registrationQuote, entitlementView, intentObservation} from '../services/api/hosting_api/portal/portal.mjs';
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), {
   status, headers: {'Content-Type': 'application/json'},
+});
+
+test('intent receipts reject borrowed, incomplete and qualified observations', () => {
+  const id = '11111111-1111-4111-8111-111111111111', app = '22222222-2222-4222-8222-222222222222';
+  const stages = ['intake','commercial_authority','profile_qualification','tenant_admin_bindings','secret_bindings',
+    'backups','tenant_project_environment','hosting_plan','artifact_admission','runtime_placement','domain_ownership',
+    'route_tls','postgres','storage','resource_budget','release_health','observability'];
+  const row = {id,application_id:app,state:'RECORDED',intent_sha256:'a'.repeat(64),
+    desired:{template_id:'supplier',template_version:'1.0',domain_intent:{hostname:'supplier.co.zw'}},
+    evaluation:{id,revision:1,receipt:{controller_version:'hosting-readback-v1',request_id:id,intent_sha256:'a'.repeat(64),
+      state:'NOT_QUALIFIED',observed_at:'2026-10-07T00:00:00Z',resource_mutations_performed:false,transformations:[],
+      stages:stages.map(stage => ({stage,state:'BLOCKED',reason:'Missing evidence'}))}}};
+  assert.equal(intentObservation(row,app),row.evaluation.receipt);
+  assert.throws(() => intentObservation(row,id));
+  for (const patch of [{request_id:app},{intent_sha256:'b'.repeat(64)},{state:'QUALIFIED'},
+                       {resource_mutations_performed:true},{transformations:['altered']},{observed_at:'invalid'},
+                       {observed_at:'2026-10-07T00:00:00'},{stages:[]},
+                       {stages:row.evaluation.receipt.stages.map(stage => ({...stage,state:'QUALIFIED'}))}]) {
+    assert.throws(() => intentObservation({...row,evaluation:{...row.evaluation,receipt:{...row.evaluation.receipt,...patch}}},app));
+  }
+  const duplicate = structuredClone(row);
+  duplicate.evaluation.receipt.stages[1] = duplicate.evaluation.receipt.stages[0];
+  assert.throws(() => intentObservation(duplicate,app));
+  assert.throws(() => intentObservation({...row,evaluation:null},app));
 });
 
 test('plan readback preserves large capacity ceilings and rejects malformed policy', () => {

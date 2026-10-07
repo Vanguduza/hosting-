@@ -35,6 +35,7 @@ def operation(operation_id, summary, code, output, request=None, public=False, d
 
 
 def document():
+    from .intent_contract import SCHEMA as intent_schema
     identity = {"id": UUID}
     audit = {"request_id": UUID}
     resource = obj({"id": UUID, "node_id": UUID, "memory_mb": INT, "cpu_milli": INT,
@@ -302,6 +303,39 @@ def document():
                               queued, allocation(256, 16384, 100, 16000),
                               description="Single-node persistent Garage profile; no public endpoint or redundancy.")},
     }
+    from .partner_intents import PUBLIC_DESIRED
+    intent_stage = obj({'stage': STRING, 'state': {'enum': ['RECORDED', 'MATCHED', 'OBSERVED',
+        'OBSERVED_HEALTHY', 'BLOCKED', 'NOT_REQUESTED']}, 'reason': STRING}, ('stage', 'state', 'reason'))
+    intent_receipt = obj({'controller_version': {'const': 'hosting-readback-v1'}, 'request_id': UUID,
+        'intent_sha256': {'type': 'string', 'pattern': '^[a-f0-9]{64}$'}, 'state': {'const': 'NOT_QUALIFIED'},
+        'observed_at': DATE, 'resource_mutations_performed': {'const': False},
+        'transformations': {'type': 'array', 'maxItems': 0}, 'stages': array(intent_stage)},
+        ('controller_version', 'request_id', 'intent_sha256', 'state', 'observed_at',
+         'resource_mutations_performed', 'transformations', 'stages'))
+    intent_evaluation = obj({'id': UUID, 'revision': {'type': 'integer', 'minimum': 1},
+        'created_at': DATE, 'receipt': intent_receipt}, ('id', 'revision', 'created_at', 'receipt'))
+    intent_summary = obj({'id': UUID, 'application_id': UUID,
+        'intent_sha256': {'type': 'string', 'pattern': '^[a-f0-9]{64}$'}, 'state': {'const': 'RECORDED'},
+        'created_at': DATE, 'desired': obj({key: intent_schema['properties'][key] for key in PUBLIC_DESIRED}, PUBLIC_DESIRED),
+        'evaluation': {'oneOf': [{'type': 'null'}, intent_evaluation]}},
+        ('id', 'application_id', 'intent_sha256', 'state', 'created_at', 'desired', 'evaluation'))
+    intent_submission = obj({'intent': intent_summary, 'replayed': {'type': 'boolean'}}, ('intent', 'replayed'))
+    intent_reconciliation = obj({'evaluation': intent_evaluation, 'replayed': {'type': 'boolean'}}, ('evaluation', 'replayed'))
+    intents = app + '/intents'
+    paths[intents] = {
+        'get': operation('listHostingIntents', 'Read up to 50 recorded intents and latest observations', 200,
+            obj({'intents': {**array(intent_summary), 'maxItems': 50}}, ('intents',)),
+            description='Human owners and administrators only. Private authority and secret references are excluded.'),
+        'post': operation('recordHostingIntent', 'Record immutable desired state and initial observation', 201,
+            intent_submission, obj({'intent': intent_schema}, ('intent',)),
+            description='Human owners and administrators only. Existing project/environment binding is required. No resources are provisioned or commercial authority granted.')}
+    paths[intents]['post']['responses']['200'] = response(intent_submission, 'Matching immutable request replay')
+    paths[intents + '/{intent_id}'] = {'get': operation('getHostingIntent', 'Read intent and up to 20 historical observations', 200,
+        obj({'intent': intent_summary, 'evaluations': {**array(intent_evaluation), 'maxItems': 20}}, ('intent', 'evaluations')))}
+    paths[intents + '/{intent_id}/reconcile'] = {'post': operation('reconcileHostingIntent', 'Record a consistent hosting-state observation', 201,
+        intent_reconciliation, obj({'idempotency_key': UUID}, ('idempotency_key',)),
+        description='Human owners and administrators only. Matching key replays the original historical observation; use a fresh key to observe again. All receipts remain NOT_QUALIFIED.')}
+    paths[intents + '/{intent_id}/reconcile']['post']['responses']['200'] = response(intent_reconciliation, 'Original historical observation replay')
     replay = response(obj({"id": UUID, "state": STRING, "replayed": {"const": True}},
                           ("id", "state", "replayed")), "Matching idempotent replay")
     registrations = org + "/domain-registrations"

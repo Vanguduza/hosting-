@@ -82,6 +82,20 @@ def call(base, path, token=None, body=None, ca_file=None, opener=None):
     return status, result
 
 
+def intent_file(path):
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'services/api'))
+    from hosting_api.intent_contract import unique_object, validate
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+    with os.fdopen(fd, 'r', encoding='utf-8') as file:
+        info = os.fstat(file.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077 or info.st_size > 65536:
+            raise ValueError('Intent must be an owner-only regular file of at most 64 KiB')
+        intent = json.loads(file.read(65537), object_pairs_hook=unique_object)
+    validate(intent)
+    return intent
+
+
 def parser():
     result = argparse.ArgumentParser(description="DIAL Hosting control API operator client")
     result.add_argument("--base-url", required=True, help="HTTPS origin (or local loopback HTTP)")
@@ -94,6 +108,8 @@ def parser():
         "projects": ("org",), "project-create": ("org", "name"),
         "applications": ("org", "project"),
         "application-create": ("org", "project", "name", "environment"),
+        "intents": ("org", "app"), "intent": ("org", "app", "intent_id"),
+        "intent-submit": ("org", "app"), "intent-reconcile": ("org", "app", "intent_id"),
         "traffic": ("org", "app"), "suspend": ("org", "app", "reason"),
         "resume": ("org", "app", "reason"),
         "domain": ("org", "app"), "domain-register": ("org", "app", "hostname"),
@@ -118,8 +134,10 @@ def parser():
         command = commands.add_parser(name)
         for field in fields:
             command.add_argument(field, type=int if field in ("port", "memory_mb", "cpu_milli", "expires_hours", "term_years") else str)
-        if name in ("team-invite", "release-queue", "rollback", "postgres-create", "valkey-create", "storage-create", "registration-request"):
+        if name in ("team-invite", "release-queue", "rollback", "postgres-create", "valkey-create", "storage-create", "registration-request", "intent-reconcile"):
             command.add_argument("--idempotency-key", type=identifier)
+        if name == 'intent-submit':
+            command.add_argument('--intent-file', required=True, help='Owner-only typed HostingIntent JSON file')
         if name == "team-accept":
             command.add_argument("--invitation-file", required=True, help="Owner-only invitation token file")
         if name == "audit":
@@ -194,6 +212,16 @@ def request_for(args):
         return path, ({"name": args.name, "environment": args.environment}
                       if name == "application-create" else None), None
     app = org + "/applications/" + identifier(args.app)
+    if name in ('intents', 'intent', 'intent-submit', 'intent-reconcile'):
+        path = app + '/intents'
+        if name in ('intent', 'intent-reconcile'):
+            path += '/' + identifier(args.intent_id)
+        if name == 'intent-submit':
+            return path, {'intent': intent_file(args.intent_file)}, None
+        if name == 'intent-reconcile':
+            key = args.idempotency_key or str(uuid.uuid4())
+            return path + '/reconcile', {'idempotency_key': key}, key
+        return path, None, None
     if name in ("traffic", "suspend", "resume"):
         return app + "/traffic", (None if name == "traffic" else
             {"action": name, "reason": args.reason, "confirm": name + "_application"}), None

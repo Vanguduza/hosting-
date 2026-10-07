@@ -72,6 +72,14 @@ a new registration request deliberately rotates it. Quote approval is bound to
 the exact current quote UUID and hash. Unavailable quote readback clears old terms
 and approval choices; changing the selected quote clears the consent checkbox.
 
+Owners and administrators can review [recorded hosting requests](PARTNER_INTENTS.md)
+and their latest reconciliation checks. Observation times identify historical
+readback; a recheck records another receipt without provisioning resources.
+Successful rechecks rotate their retry key. Interrupted rechecks retain that key
+so a retry retrieves the same observation. Tenant/application changes and
+unavailable or malformed readback clear previous checks and choices. Private
+commercial/admin/secret references are excluded.
+
 ## Browser boundaries
 
 Only five exact asset paths are served. Unknown paths cannot access files from

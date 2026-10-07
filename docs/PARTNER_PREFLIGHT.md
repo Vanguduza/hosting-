@@ -40,6 +40,8 @@ bindings, profile qualification, independent backup receipts and complete resour
 budget evidence are missing. Exit 1 means valid but unqualified; exit 2 means
 invalid input or failed readback. No exit path claims production success.
 
-This is the intake/readback boundary for later orchestration. It does not implement
-the durable HostingIntent controller, canonical entitlement registry, profile
-registry or multi-resource reconciliation described in the integration contract.
+The [durable intent API](PARTNER_INTENTS.md) now records the same typed requests
+and immutable reconciliation receipts, using one hosting database snapshot and
+actual reservations/hosting policy. This GET-only tool remains a separate
+preflight. Automatic multi-resource execution, canonical entitlement/profile
+registries and production qualification remain open.
