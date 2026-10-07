@@ -34,29 +34,44 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 128,
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+      "not": {
+        "pattern": "\\s"
+      }
     },
     "dial_business_account_id": {
       "type": "string",
       "minLength": 1,
       "maxLength": 128,
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+      "not": {
+        "pattern": "\\s"
+      }
     },
     "project_id": {
       "type": "string",
-      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "not": {
+        "pattern": "\\s"
+      }
     },
     "template_id": {
       "type": "string",
       "minLength": 1,
       "maxLength": 128,
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+      "not": {
+        "pattern": "\\s"
+      }
     },
     "template_version": {
       "type": "string",
       "minLength": 1,
       "maxLength": 128,
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+      "not": {
+        "pattern": "\\s"
+      }
     },
     "environment_profile": {
       "enum": [
@@ -78,7 +93,10 @@
         "hostname": {
           "type": "string",
           "maxLength": 253,
-          "pattern": "^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z][a-z0-9-]{1,62}$"
+          "pattern": "^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])$",
+          "not": {
+            "pattern": "\\s"
+          }
         }
       }
     },
@@ -124,7 +142,10 @@
     },
     "release_artifact_ref": {
       "type": "string",
-      "pattern": "^[a-z0-9][a-z0-9./:_-]{1,240}@sha256:[a-f0-9]{64}$"
+      "pattern": "^[a-z0-9][a-z0-9./:_-]{1,240}@sha256:[a-f0-9]{64}$",
+      "not": {
+        "pattern": "\\s"
+      }
     },
     "secret_refs": {
       "type": "array",
@@ -133,7 +154,10 @@
       "items": {
         "type": "string",
         "maxLength": 256,
-        "pattern": "^secret://[a-z0-9][a-z0-9/_-]{0,190}#[1-9][0-9]{0,8}$"
+        "pattern": "^secret://[a-z0-9][a-z0-9/_-]{0,190}#[1-9][0-9]{0,8}$",
+        "not": {
+          "pattern": "\\s"
+        }
       }
     },
     "tenant_admin_refs": {
@@ -145,24 +169,36 @@
         "type": "string",
         "minLength": 1,
         "maxLength": 128,
-        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+        "not": {
+          "pattern": "\\s"
+        }
       }
     },
     "commercial_entitlement_ref": {
       "type": "string",
       "minLength": 1,
       "maxLength": 128,
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+      "not": {
+        "pattern": "\\s"
+      }
     },
     "requested_by": {
       "type": "string",
       "minLength": 1,
       "maxLength": 128,
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+      "not": {
+        "pattern": "\\s"
+      }
     },
     "request_id": {
       "type": "string",
-      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "not": {
+        "pattern": "\\s"
+      }
     }
   }
 }

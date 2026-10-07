@@ -61,6 +61,10 @@ class PartnerPreflightTests(unittest.TestCase):
                    {"resource_budget": {"cpu_milli": 100, "memory_mb": 0}},
                    {"domain_intent": {"hostname": "app.example.org", "verified": True}},
                    {"domain_intent": {"hostname": "app.internal"}},
+                   {"domain_intent": {"hostname": "app.a-"}},
+                   {"domain_intent": {"hostname": "app.example.org\n"}},
+                   {"requested_by": "factory-1\n"},
+                   {"release_artifact_ref": self.intent["release_artifact_ref"] + "\n"},
                    {"secret_refs": ["plaintext-password"]}, {"secret_refs": ["secret://app/password#0"]},
                    {"tenant_admin_refs": []}, {"secret_refs": ["secret://app/password#1"] * 2},
                    {"commercial_consent": True})

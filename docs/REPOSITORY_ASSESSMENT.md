@@ -84,9 +84,13 @@ The API image also builds with verified TLS through the environment's proxy CA.
 The reconciled continuation was pushed to draft PR #1. GitHub Actions
 [37575502254](https://github.com/Vanguduza/hosting-/actions/runs/37575502254)
 passed all nine jobs on `753533308133fe4690483bbda7026c18971e8085`, including the
-new portal browser job. Later preflight/runtime repairs require their own head CI;
-the earlier success is not attributed to those later changes. Pack consistency,
-compilation and whitespace checks also pass.
+new portal browser job. Follow-up run
+[37576709683](https://github.com/Vanguduza/hosting-/actions/runs/37576709683)
+also passed all nine jobs on `60e00d52af87da978b1146ea41f4d55c9863ce59`, verifying
+the typed preflight and runtime repairs. Subsequent schema validation rejects
+trailing whitespace and malformed top-level domain labels; its focused tests pass
+and its head checks are available from the draft PR. Pack consistency, compilation
+and whitespace checks also pass.
 
 ## Remaining deployment inputs
 

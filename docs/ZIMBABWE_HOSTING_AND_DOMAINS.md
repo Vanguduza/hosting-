@@ -43,6 +43,13 @@ or completed registration. The published guidance does not establish a registrar
 Start with an audited operator fulfillment process if the selected member cannot
 offer one, then automate only its documented interface.
 
+ZISPA's published procedure specifies registrar email submission of a completed
+ASCII template. Before submission, authoritative primary and secondary DNS must
+exist and respond consistently. Obtain a signed registrant request accepting the
+registry terms; retain documents privately through the nominated registrar. Confirm
+the member's current registration and renewal fees rather than importing a generic
+`.com` price or assuming free/perpetual `.co.zw` registration.
+
 [OpenSRS](https://opensrs.com/domains/) advertises a white-label reseller program,
 `.com` coverage, API integration and branded end-user notices. Its availability,
 prices, account eligibility, payment funding and API behavior must be confirmed in
