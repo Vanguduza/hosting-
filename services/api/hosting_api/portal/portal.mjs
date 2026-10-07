@@ -112,6 +112,29 @@ export class MutationKeys {
 export function canManage(role) { return role === 'owner' || role === 'admin'; }
 export function canManageAccess(role) { return role === 'owner'; }
 
+export function entitlementView(data) {
+  const features = ['release','postgres','valkey','storage','domain','domain_registration','build'];
+  const decimal = value => typeof value === 'string' && /^(0|[1-9][0-9]{0,18})$/.test(value);
+  if (!data || data.authority !== 'OPERATOR_ASSIGNED' || typeof data.requires_assignment !== 'boolean' ||
+      !['UNCONFIGURED','ACTIVE','EXPIRED'].includes(data.status) || !data.usage ||
+      !decimal(data.usage.cpu_milli) || !decimal(data.usage.memory_mb) ||
+      ['projects','applications','domains','registrations'].some(name => !Number.isSafeInteger(data.usage[name]) || data.usage[name]<0)) {
+    throw new Error('Hosting plan readback is invalid.');
+  }
+  const v = data.version;
+  if (data.status === 'UNCONFIGURED') {
+    if (v !== null) throw new Error('Hosting plan readback is invalid.');
+  } else if (!v || !CANONICAL_UUID.test(v.id) || typeof v.plan_ref !== 'string' || !/^plan:\/\/[a-zA-Z0-9/_-]{1,120}$/.test(v.plan_ref) ||
+      !Array.isArray(v.features) || v.features.some(feature => !features.includes(feature)) || new Set(v.features).size !== v.features.length ||
+      !decimal(v.cpu_milli_limit) || BigInt(v.cpu_milli_limit)<1n || BigInt(v.cpu_milli_limit)>9223372036854775807n ||
+      !decimal(v.memory_mb_limit) || BigInt(v.memory_mb_limit)<1n || BigInt(v.memory_mb_limit)>9223372036854775807n ||
+      ['project_limit','application_limit','domain_limit','registration_limit'].some(name => !Number.isInteger(v[name]) || v[name]<0 || v[name]>100000) ||
+      !Number.isFinite(Date.parse(v.valid_from)) || !Number.isFinite(Date.parse(v.valid_until)) || Date.parse(v.valid_until)<=Date.parse(v.valid_from)) {
+    throw new Error('Hosting plan readback is invalid.');
+  }
+  return data;
+}
+
 const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export function invitationState(invitation, now = Date.now()) {
@@ -224,7 +247,7 @@ function bootstrap() {
     if (values.some(value => value.id === previous)) select.value = previous;
   }
   function clearDetails() {
-    for (const id of ['quota','health','resources','domain','traffic','incidents','releases','dns-proof']) $(id).replaceChildren();
+    for (const id of ['quota','entitlements','health','resources','domain','traffic','incidents','releases','dns-proof']) $(id).replaceChildren();
     $('release-count').textContent = ''; $('dns-proof').hidden = true;
     $('rollback-target').replaceChildren();
   }
@@ -411,7 +434,7 @@ function bootstrap() {
   async function loadDetails() {
     clearDetails(); const current = generation;
     const jobs = [];
-    if ($('organizations').value) jobs.push(['quota', `${orgPath()}/quotas`]);
+    if ($('organizations').value) jobs.push(['quota', `${orgPath()}/quotas`], ['entitlements', `${orgPath()}/entitlements`]);
     if ($('applications').value) for (const [id, suffix] of [
       ['health','health'], ['releases','releases'], ['domain','domain'], ['traffic','traffic'],
       ['postgres','postgres'], ['valkey','valkey'], ['storage','storage'], ['incidents','health/incidents']
@@ -432,6 +455,22 @@ function bootstrap() {
         const reserved = data.reserved;
         $('quota').append(element('div', `${reserved.memory_mb} MB / ${reserved.cpu_milli} millicores`, 'stat'),
           element('p', data.quota ? `Ceiling: ${data.quota.memory_mb_limit} MB / ${data.quota.cpu_milli_limit} millicores` : 'No tenant reservation ceiling configured.', 'hint'));
+      } else if (id === 'entitlements') {
+        let plan;
+        try { plan = entitlementView(data); }
+        catch { failures++; $('entitlements').append(element('p', 'Hosting plan readback unavailable.', 'hint')); continue; }
+        $('entitlements').append(badge(plan.status));
+        const v = plan.version;
+        if (!v) $('entitlements').append(element('p', plan.requires_assignment
+          ? 'A hosting plan is required before new work can start.' : 'No hosting plan is assigned. Contact your operator before launch.', 'hint'));
+        else {
+          $('entitlements').append(element('p', v.plan_ref, 'details'), element('p', `Valid until: ${date(v.valid_until)}`, 'hint'),
+            element('p', `Features: ${v.features.join(', ') || 'None'}`, 'details'));
+          for (const [name, ceiling] of [['projects','project_limit'],['applications','application_limit'],['domains','domain_limit'],['registrations','registration_limit']]) {
+            $('entitlements').append(element('p', `${name}: ${plan.usage[name]} / ${v[ceiling]}`, 'hint'));
+          }
+          if (plan.status === 'EXPIRED') $('entitlements').append(element('p', 'New work is blocked. Queued work waits for renewal.', 'hint'));
+        }
       } else if (id === 'health') {
         $('health').append(badge(data.state), element('p', `Last checked: ${date(data.checked_at)}`, 'hint'));
       } else if (id === 'releases') {

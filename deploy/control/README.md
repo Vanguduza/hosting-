@@ -43,3 +43,9 @@ docker compose -f deploy/control/compose.yaml -f deploy/control/worker.compose.y
 The resource API also accepts `POST /v1/organizations/{org}/applications/{app}/postgres` with a UUID `idempotency_key`, `memory_mb` (256–32768), and `cpu_milli` (100–32000). Read its state with `GET` on the same path. Its worker provisions one private PostgreSQL instance bound to that application and pins future releases to its node. Configure `NODE_POSTGRES_IMAGE` with a tested PostgreSQL 17 tag plus immutable digest on the node. Application containers receive `DATABASE_HOST`, `DATABASE_NAME`, `DATABASE_USER`, and `DATABASE_PASSWORD_FILE` and join only their own database network. A ready instance is not a backup or production certification: [managed PostgreSQL operations](../../docs/MANAGED_POSTGRES.md) lists recovery and missing production controls. The private object-storage resource is described in [object storage](../../docs/OBJECT_STORAGE.md). Do not expose these profiles to clients. Image admission and node enrollment must use audited protected operator credentials and private networking.
 
 The `/live` probe means only that the process exists; `/ready` requires a valid JWT and successful database query. Neither asserts deployment or hosting health. Do not point a public hostname at this API until authenticated rate limits, TLS and production readiness have been verified.
+
+[Hosting plan controls](../../docs/HOSTING_ENTITLEMENTS.md) require protected
+operator assignments and one-way required mode before production acceptance.
+Migration 027 defaults to compatibility mode for existing installations. The
+read-only entitlement health check detects this mode, missing/expired plans and
+unbounded quotas. Tenant API and worker credentials cannot change these policies.

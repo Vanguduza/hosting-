@@ -46,6 +46,14 @@ renewals and late disconnected-session replies fail closed. This advances
 DU-003/DU-053/DU-054 without creating an issuer account or promoting live IAM
 qualification. Hosting roles still come from the canonical database.
 
+The current continuation implements [hosting-local entitlement controls](HOSTING_ENTITLEMENTS.md):
+immutable operator assignments, tenant readback, feature/count/capacity admission,
+worker execution holds and renewal, and registrar purchase-start checks. Migration
+027 preserves existing tenants in an explicit compatibility mode; production
+requires the protected one-way required-assignment switch. Canonical commercial
+entitlement import, billing and offboarding remain open. This advances DU-004 and
+DU-046 while all readiness/acceptance flags remain false.
+
 Runtime verification found and corrected a private-umask Valkey ACL permission
 failure, added immutable retry repair, and made API/fixture Docker copies readable
 by their unprivileged users. Local private ingress/S3 probes retain local routing
@@ -121,6 +129,18 @@ skip in that invocation), 29 JavaScript client tests, the full intercepted PKCE
 redirect/renewal browser proof and the existing workspace browser proof. Pack
 consistency, compilation, OpenAPI validation and Compose configuration pass.
 Publication and final-head CI are recorded on draft PR #1.
+
+Issuer run [37600427716](https://github.com/Vanguduza/hosting-/actions/runs/37600427716)
+passed all nine jobs on `7c34b854cb4006702fef7f32b938c09940a4954b`, including
+the pinned Playwright 1.55 navigation fixture. Entitlement verification and final-head
+CI are recorded on the same draft PR.
+
+The entitlement continuation passes all 15 dedicated disposable database tests,
+the existing 22 database tests and 13 registration tests, 84 fixture-free Python
+tests (62 runtime tests skip in that invocation), 30 JavaScript tests and both
+browser proofs. OpenAPI advertises 34 paths / 45 operations. Fresh Compose startup
+expects 27 migrations and rejects schema drift. Required-assignment mode remains
+a protected installation step; no production flag is promoted by these tests.
 
 ## Remaining deployment inputs
 

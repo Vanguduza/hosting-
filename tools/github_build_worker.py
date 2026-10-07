@@ -15,6 +15,7 @@ from psycopg.rows import dict_row
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "services/api"))
 from hosting_api.migrate import verify as verify_schema
+from hosting_api.entitlements import permits, hold
 
 
 def run(args, *, timeout=300, cwd=None, git_env=None):
@@ -47,8 +48,11 @@ def claim(conn):
         if not row:
             return None
         source = conn.execute("SELECT * FROM hosting.git_sources WHERE id=%s", (row["source_id"],)).fetchone()
+        if not permits(conn, source['organization_id'], 'build'):
+            hold(conn, 'github_builds', row['delivery_id'], build=True)
+            return None
         attempt = row["attempts"] + 1
-        conn.execute("UPDATE hosting.github_builds SET state='RUNNING',attempts=%s,"
+        conn.execute("UPDATE hosting.github_builds SET state='RUNNING',attempts=%s,last_error=NULL,"
                      "lease_until=now()+interval '90 minutes' WHERE delivery_id=%s", (attempt, row["delivery_id"]))
         return row, source, attempt
 

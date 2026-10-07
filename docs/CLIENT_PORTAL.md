@@ -1,5 +1,9 @@
 # Client workspace portal
 
+The workspace now shows [hosting plans and limits](HOSTING_ENTITLEMENTS.md),
+including expiry and required-assignment status. Plan changes use protected
+operator credentials; tenant controls submit work to database-enforced admission.
+
 The implemented development portal is served at `GET /portal` by the control API.
 The API Docker image copies its static files with the existing `hosting_api`
 package; no frontend dependency installation or separate server is needed.

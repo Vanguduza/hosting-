@@ -114,7 +114,7 @@ class CliTests(unittest.TestCase):
         one, two, three, four = (str(uuid.uuid4()) for _ in range(4))
         samples = {
             "live": [], "ready": [], "openapi": [], "orgs": [],
-            "audit": [one], "capacity": [one, "2026-09-24T00:00:00Z", "2026-09-25T00:00:00Z"],
+            "audit": [one], "capacity": [one, "2026-09-24T00:00:00Z", "2026-09-25T00:00:00Z"], "entitlements": [one],
             "quotas": [one],
             "projects": [one], "project-create": [one, "alpha"],
             "applications": [one, two], "application-create": [one, two, "api", "production"],

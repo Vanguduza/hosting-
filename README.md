@@ -23,6 +23,13 @@ Configured [issuer sign-in and renewal](docs/ISSUER_LOGIN.md) now use PKCE and
 validated JWTs, keeping access/refresh tokens in memory. Actual issuer and public
 ingress installation and qualification remain separate gates.
 
+[Hosting plan assignments](docs/HOSTING_ENTITLEMENTS.md) now enforce features,
+resource counts and reservation ceilings in PostgreSQL. Workers hold queued work
+when the current plan is unavailable, then resume after renewal without spending
+retry attempts. Protected operators import immutable assignments and enable
+required mode; the portal and CLI expose scoped policy readback. Canonical
+commercial entitlement import and billing remain open.
+
 ## Partner Platform integration and completion
 
 This platform is the infrastructure authority for DIAL-built partner

@@ -72,9 +72,9 @@ class ApiContractTests(unittest.TestCase):
 
     def test_only_implemented_operations_are_advertised(self):
         paths = document()["paths"]
-        self.assertEqual(len(paths), 33)
+        self.assertEqual(len(paths), 34)
         self.assertEqual(sum(method in ("get", "post") for item in paths.values()
-                             for method in item), 44)
+                             for method in item), 45)
         self.assertIn("/v1/organizations/{organization_id}/applications/{application_id}/health", paths)
         self.assertIn("/v1/organizations/{organization_id}/applications/{application_id}/health/incidents", paths)
         self.assertIn("/v1/organizations/{organization_id}/quotas", paths)

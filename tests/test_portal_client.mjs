@@ -1,10 +1,29 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {ControlClient, MutationKeys, ApiError, canManage, canManageAccess, AuditPages,
-  invitationState, visibleReceipt, registrationQuote} from '../services/api/hosting_api/portal/portal.mjs';
+  invitationState, visibleReceipt, registrationQuote, entitlementView} from '../services/api/hosting_api/portal/portal.mjs';
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), {
   status, headers: {'Content-Type': 'application/json'},
+});
+
+test('plan readback preserves large capacity ceilings and rejects malformed policy', () => {
+  const data = {authority:'OPERATOR_ASSIGNED',status:'ACTIVE',requires_assignment:true,
+    usage:{projects:1,applications:1,domains:0,registrations:0,cpu_milli:'100',memory_mb:'512'},
+    version:{id:'11111111-1111-4111-8111-111111111111',plan_ref:'plan://hosting-one',features:['release'],
+      valid_from:'2026-01-01T00:00:00Z',valid_until:'2027-01-01T00:00:00Z',cpu_milli_limit:'9223372036854775807',
+      memory_mb_limit:'8192',project_limit:2,application_limit:3,domain_limit:1,registration_limit:0}};
+  assert.equal(entitlementView(data).version.cpu_milli_limit,'9223372036854775807');
+  assert.equal(entitlementView({...data,status:'UNCONFIGURED',version:null}).status,'UNCONFIGURED');
+  for (const patch of [{features:['release','release']},{features:['unknown']},{valid_until:'invalid'},
+    {cpu_milli_limit:100},{memory_mb_limit:'0'},{cpu_milli_limit:'9223372036854775808'},
+    {application_limit:true},{plan_ref:'<script>alert(1)</script>'}]) {
+    assert.throws(() => entitlementView({...data,version:{...data.version,...patch}}),/invalid/);
+  }
+  for (const patch of [{authority:'BILLING_CANONICAL'},{status:'PAID'},{status:'UNCONFIGURED'},
+    {requires_assignment:undefined},{usage:{...data.usage,projects:1.5}}]) {
+    assert.throws(() => entitlementView({...data,...patch}),/invalid/);
+  }
 });
 
 test('registration approval requires current exact quoted intent and safe prices', () => {

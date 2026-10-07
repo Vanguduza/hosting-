@@ -892,6 +892,11 @@ class Handler(BaseHTTPRequestHandler):
                     elif method == "GET" and (match := re.fullmatch(
                             r"/v1/organizations/([0-9a-f-]{36})/quotas", path)):
                         result = self.quotas(conn, uuid.UUID(match.group(1)), actor)
+                    elif method == 'GET' and (match := re.fullmatch(
+                            r'/v1/organizations/([0-9a-f-]{36})/entitlements', path)):
+                        readback = conn.execute('SELECT hosting.entitlement_readback(%s) AS result',
+                                                (uuid.UUID(match.group(1)),)).fetchone()['result']
+                        result = (200, readback) if readback else (404, {'error': 'not_found'})
                     elif path == "/v1/team/invitations/accept" and method == "POST":
                         result = self.accept_invitation(conn, actor, body, request_id)
                     elif match := re.fullmatch(r"/v1/organizations/([0-9a-f-]{36})/domain-registrations(?:/([0-9a-f-]{36})/(approve|cancel))?", path):
@@ -974,8 +979,8 @@ class Handler(BaseHTTPRequestHandler):
         except psycopg.errors.UniqueViolation:
             return self.reply(409, {"error": "conflict"})
         except psycopg.errors.RaiseException as exc:
-            if exc.diag.message_primary == "quota_exceeded":
-                return self.reply(409, {"error": "quota_exceeded"})
+            if exc.diag.message_primary in ('quota_exceeded', 'entitlement_unavailable', 'entitlement_limit_exceeded'):
+                return self.reply(409, {"error": exc.diag.message_primary})
             return self.reply(503, {"error": "unavailable"})
         except Exception:
             # No SQL, token or configuration detail in a public response.

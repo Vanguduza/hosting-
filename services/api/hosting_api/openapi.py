@@ -56,6 +56,20 @@ def document():
                  ("id", "job_id", "state", "request_id"))
     org = "/v1/organizations/{organization_id}"
     app = org + "/applications/{application_id}"
+    features = {'type': 'array', 'uniqueItems': True, 'maxItems': 7,
+                'items': {'enum': ['release','postgres','valkey','storage','domain','domain_registration','build']}}
+    decimal = {'type': 'string', 'pattern': '^[0-9]{1,19}$', 'description': 'Decimal integer, preserving 64-bit precision'}
+    plan_fields = {'id': UUID, 'plan_ref': STRING, 'features': features, 'valid_from': DATE, 'valid_until': DATE,
+                   'cpu_milli_limit': decimal, 'memory_mb_limit': decimal,
+                   **{name: {'type': 'integer', 'minimum': 0, 'maximum': 100000}
+                      for name in ('project_limit','application_limit','domain_limit','registration_limit')}}
+    entitlement = obj({'authority': {'const': 'OPERATOR_ASSIGNED'},
+                       'status': {'enum': ['UNCONFIGURED','ACTIVE','EXPIRED']}, 'requires_assignment': BOOL,
+                       'version': {'oneOf': [obj(plan_fields, tuple(plan_fields)), {'type':'null'}]},
+                       'usage': obj({'cpu_milli': decimal, 'memory_mb': decimal,
+                                     **{name: {'type':'integer','minimum':0} for name in ('projects','applications','domains','registrations')}},
+                                    ('cpu_milli','memory_mb','projects','applications','domains','registrations'))},
+                      ('authority','status','requires_assignment','version','usage'))
     registration_request = obj({"idempotency_key": UUID,
         "hostname": {"type": "string", "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.(com|co\\.zw)$"},
         "term_years": {"type": "integer", "minimum": 1, "maximum": 5},
@@ -128,6 +142,8 @@ def document():
                             "schema": {"type": "string", "format": "date-time"},
                             "description": "UTC timestamp with second precision; to is exclusive."}
                            for name in ("from", "to")]}},
+        org + '/entitlements': {'get': operation('readHostingEntitlements', 'Read the current hosting plan and limits', 200,
+            entitlement, description='Human tenant membership required. Operator evidence is private. Expired assignments block new work and hold queued execution. This is hosting-local policy, not a billing or commercial entitlement authority.')},
         org + "/quotas": {"get": operation("readReservationQuota", "Read active reservation ceiling", 200,
             obj({"mode": {"enum": ["OPERATOR_SET", "UNBOUNDED"]},
                  "quota": {"oneOf": [obj({"cpu_milli_limit": INT, "memory_mb_limit": INT,

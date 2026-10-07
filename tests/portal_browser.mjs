@@ -32,6 +32,7 @@ const privateInvitation = 't'.repeat(43);
 const invitationKeys = new Set();
 const writes = [], errors = [];
 let role = 'admin', unavailable = false, expired = false, removedMember = false, revokedInvite = false, revokedGrant = false;
+let planStatus = 'ACTIVE';
 const auditEvent = (id, previous_hash, event_hash) => ({id, previous_hash, event_hash,
   actor_sub: 'owner-subject', action: 'project.create', resource_id: project,
   request_id: orgA, created_at: '2026-10-07T00:00:00Z'});
@@ -118,6 +119,14 @@ try {
     else if (pathname.endsWith('/service-accounts')) body = {service_accounts: [{id: grant, application_id: app,
       client_id: 'factory-client', actor_sub: 'factory-subject', revoked_at: revokedGrant ? '2026-10-07T00:00:00Z' : null}]};
     else if (pathname.endsWith('/quotas')) body = {reserved: {cpu_milli: 250, memory_mb: 256}, quota: null};
+    else if (pathname.endsWith('/entitlements')) {
+      body = {authority: 'OPERATOR_ASSIGNED', status: planStatus, requires_assignment: true,
+        version: {id: orgA,plan_ref:'plan://browser-hosting',features:['release','domain'],
+          valid_from:'2026-01-01T00:00:00Z',valid_until:planStatus==='EXPIRED'?'2026-01-02T00:00:00Z':'2099-01-01T00:00:00Z',cpu_milli_limit:'2000',memory_mb_limit:'4096',
+          project_limit:2,application_limit:3,domain_limit:2,registration_limit:0},
+        usage: {projects: 1, applications: 1, domains: 1, registrations: 0, cpu_milli: '250', memory_mb: '256'}};
+      if (unavailable) {status=503;body={error:'unavailable'};}
+    }
     else if (pathname.endsWith('/health/incidents')) body = {incidents: []};
     else if (pathname.endsWith('/health')) {
       body = {state: 'UP', checked_at: '2026-10-07T00:00:00Z'};
@@ -141,6 +150,8 @@ try {
   await connect();
   assert.equal(await page.locator('#token').inputValue(), '');
   assert.equal(await page.locator('#health .badge').textContent(), 'UP');
+  assert.equal(await page.locator('#entitlements .badge').textContent(), 'ACTIVE');
+  assert.match(await page.locator('#entitlements').textContent(), /projects: 1 \/ 2/);
   assert.equal(await page.locator('#projects option').textContent(), '<img src=x onerror=alert(1)>');
   assert.equal(await page.locator('img').count(), 0);
   assert.equal(await page.locator('#access-panel').isVisible(), false);
@@ -170,12 +181,19 @@ try {
   await page.waitForFunction(() => document.getElementById('message').textContent === 'Readback updated.');
   assert.equal(writes.at(-1).body.target_release_id, previousRelease);
   assert.ok(writes.at(-1).path.endsWith('/rollback'));
+  planStatus = 'EXPIRED';
+  await page.locator('#refresh').click();
+  await page.waitForFunction(() => document.querySelector('#entitlements .badge')?.textContent === 'EXPIRED');
+  assert.match(await page.locator('#entitlements').textContent(), /Queued work waits for renewal/);
   unavailable = true;
   await page.locator('#refresh').click();
   await page.waitForFunction(() => document.getElementById('message').textContent.includes('readbacks are unavailable'));
   assert.equal(await page.locator('#health .badge').count(), 0);
   assert.match(await page.locator('#health').textContent(), /unavailable/);
+  assert.equal(await page.locator('#entitlements .badge').count(), 0);
+  assert.match(await page.locator('#entitlements').textContent(), /unavailable/);
   unavailable = false;
+  planStatus = 'ACTIVE';
   await page.locator('#disconnect').click();
   assert.equal(await page.locator('#workspace').isVisible(), false);
   assert.equal(await page.locator('#receipt').textContent(), 'No changes requested in this session.');

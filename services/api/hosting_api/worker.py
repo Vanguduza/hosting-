@@ -379,6 +379,7 @@ def refresh_nodes(conn, certificate):
 
 
 def claim(conn):
+    from .entitlements import permits, hold
     with conn.transaction():
         job = conn.execute(
             "SELECT id,release_id,organization_id,attempts FROM hosting.jobs "
@@ -389,9 +390,12 @@ def claim(conn):
         if not job:
             return None
         release = conn.execute("SELECT * FROM hosting.releases WHERE id=%s", (job["release_id"],)).fetchone()
+        if not permits(conn, release['organization_id'], 'release'):
+            hold(conn, 'jobs', job['id'])
+            return None
         node = conn.execute("SELECT * FROM hosting.nodes WHERE id=%s", (release["node_id"],)).fetchone()
         attempt = job["attempts"] + 1
-        conn.execute("UPDATE hosting.jobs SET state='RUNNING',attempts=%s,lease_until=now()+interval '10 minutes' WHERE id=%s",
+        conn.execute("UPDATE hosting.jobs SET state='RUNNING',attempts=%s,last_error=NULL,lease_until=now()+interval '10 minutes' WHERE id=%s",
                      (attempt, job["id"]))
         conn.execute("UPDATE hosting.releases SET state='DEPLOYING' WHERE id=%s", (release["id"],))
         return job, release, node, attempt

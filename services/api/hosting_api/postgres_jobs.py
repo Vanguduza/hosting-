@@ -6,6 +6,7 @@ import ssl
 import uuid
 
 from .__main__ import record
+from .entitlements import permits, hold
 from .secrets import OpenBao, SecretError
 from .worker import deliver_secrets, private_endpoint
 
@@ -20,9 +21,12 @@ def claim(conn):
         if not job:
             return None
         instance = conn.execute("SELECT * FROM hosting.postgres_instances WHERE id=%s", (job["instance_id"],)).fetchone()
+        if not permits(conn, instance['organization_id'], 'postgres'):
+            hold(conn, 'postgres_jobs', job['id'])
+            return None
         node = conn.execute("SELECT * FROM hosting.nodes WHERE id=%s", (instance["node_id"],)).fetchone()
         attempt = job["attempts"] + 1
-        conn.execute("UPDATE hosting.postgres_jobs SET state='RUNNING',attempts=%s,"
+        conn.execute("UPDATE hosting.postgres_jobs SET state='RUNNING',attempts=%s,last_error=NULL,"
                      "lease_until=now()+interval '10 minutes' WHERE id=%s", (attempt, job["id"]))
         conn.execute("UPDATE hosting.postgres_instances SET state='PROVISIONING' WHERE id=%s", (instance["id"],))
         return job, instance, node, attempt
