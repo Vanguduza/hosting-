@@ -89,6 +89,11 @@ def document():
         ("id", "hostname", "term_years", "registrant_ref", "state", "created_at", "updated_at",
          "approved_at", "fulfilled_at", "receipt_sha256", "quote"))
     paths = {
+        "/v1/auth/config": {"get": operation("loginConfiguration", "Read configured public-client sign-in settings", 200,
+            {"oneOf": [obj({"enabled": {"const": False}}, ("enabled",)),
+                obj({"enabled": {"const": True}, "issuer": STRING, "client_id": STRING,
+                     "authorization_url": STRING, "redirect_uri": STRING, "scopes": array(STRING)},
+                    ("enabled", "issuer", "client_id", "authorization_url", "redirect_uri", "scopes"))]}, public=True)},
         "/live": {"get": operation("live", "Process liveness only", 200,
                                      obj({"status": {"const": "process_alive"}}, ("status",)), public=True)},
         "/ready": {"get": operation("ready", "Authenticated database reachability", 200,
@@ -299,6 +304,21 @@ def document():
     paths[registrations + "/{registration_id}/cancel"] = {"post": operation("cancelDomainRegistration",
         "Cancel before registrar processing starts", 200, registration_receipt,
         obj({"confirm": {"const": "cancel_registration"}}, ("confirm",)))}
+    credential = {"type": "string", "minLength": 1, "maxLength": 16384}
+    nonce = {"type": "string", "pattern": "^[A-Za-z0-9_-]{43,128}$"}
+    subject = {"type": "string", "minLength": 1, "maxLength": 255}
+    login_receipt = obj({"access_token": credential, "refresh_token": {"oneOf": [credential, {"type": "null"}]},
+                         "expires_at": {"type": "integer", "minimum": 1}, "subject": subject},
+                        ("access_token", "refresh_token", "expires_at", "subject"))
+    for suffix, operation_id, summary, body in (
+        ("exchange", "exchangeLoginCode", "Exchange PKCE code and validate signed identity",
+         obj({"code": {"type": "string", "minLength": 1, "maxLength": 2048},
+              "code_verifier": {"type": "string", "pattern": "^[A-Za-z0-9._~-]{43,128}$"}, "nonce": nonce},
+             ("code", "code_verifier", "nonce"))),
+        ("refresh", "refreshLogin", "Renew the same human subject with issuer refresh credentials",
+         obj({"refresh_token": credential, "nonce": nonce, "subject": subject}, ("refresh_token", "nonce", "subject")))):
+        paths["/v1/auth/" + suffix] = {"post": operation(operation_id, summary, 200, login_receipt, body, public=True,
+            description="Requires JSON and an Origin matching the configured callback origin. No cookies, client secret or tenant authority is accepted.")}
     for path in (app + "/releases", app + "/rollback", app + "/postgres", app + "/valkey", app + "/storage"):
         paths[path]["post"]["responses"]["200"] = replay
     paths[org + "/team/invitations"]["post"]["responses"]["200"] = response(

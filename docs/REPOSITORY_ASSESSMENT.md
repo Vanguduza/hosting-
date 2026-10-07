@@ -39,6 +39,13 @@ duplicate purchase exclusion, and records transactional audit/outbox facts.
 Unknown registrar outcomes remain pending reconciliation. Actual registrar
 accounts, automatic ordering and renewals are not configured.
 
+The following continuation implements [public-client issuer sign-in](ISSUER_LOGIN.md),
+PKCE callback validation and serialized in-memory renewal. JWT signatures,
+issuer, audience, subject, nonce and supplied token hashes are checked; failed
+renewals and late disconnected-session replies fail closed. This advances
+DU-003/DU-053/DU-054 without creating an issuer account or promoting live IAM
+qualification. Hosting roles still come from the canonical database.
+
 Runtime verification found and corrected a private-umask Valkey ACL permission
 failure, added immutable retry repair, and made API/fixture Docker copies readable
 by their unprivileged users. Local private ingress/S3 probes retain local routing
@@ -61,7 +68,7 @@ CA bundle as a BuildKit secret; no environment CA or credential is checked in.
 5. Implement typed Partner HostingIntent orchestration with qualified profiles,
    canonical entitlement references, visible transformations and per-stage
    receipts; do not treat a specification or portal as a successful deployment.
-6. Complete the commercial workspace: issuer login/renewal, step-up protection,
+6. Complete the commercial workspace: live issuer/login qualification, step-up protection,
    notifications, measured metering, plans/entitlements/billing and guarded
    transfer/export/offboarding. Complete abuse detection, stronger untrusted-code
    isolation, node quarantine and untrusted PR previews.
@@ -108,6 +115,12 @@ Chromium exercises request, quote review, consent, cancellation, tenant isolatio
 unavailable readback and mobile layout. Fresh Compose startup applies all 26
 migrations and refuses source/ledger drift. These local checks precede publication
 and final-head CI; the draft PR check results are authoritative for the pushed head.
+
+The issuer continuation passes 81 fixture-free Python tests (47 runtime tests
+skip in that invocation), 29 JavaScript client tests, the full intercepted PKCE
+redirect/renewal browser proof and the existing workspace browser proof. Pack
+consistency, compilation, OpenAPI validation and Compose configuration pass.
+Publication and final-head CI are recorded on draft PR #1.
 
 ## Remaining deployment inputs
 

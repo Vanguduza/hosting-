@@ -44,6 +44,16 @@ class AuthTests(unittest.TestCase):
             with self.assertRaises(PermissionError):
                 authenticate("Bearer " + self.token(aud="hosted-app"), FakeJWKS(self.public_key))
 
+    def test_only_the_configured_portal_client_can_accompany_human_api_audience(self):
+        with patch.dict(os.environ, {"OIDC_ISSUER": "https://iam.example.test", "OIDC_AUDIENCE": "dial-control",
+                                    "OIDC_SERVICE_AUDIENCE": "dial-machine", "OIDC_LOGIN_CLIENT_ID": "portal-client"}):
+            identity = authenticate("Bearer " + self.token(aud=["dial-control", "portal-client"]), FakeJWKS(self.public_key))
+            self.assertIsNone(identity.client_id)
+            for audience in (["dial-control", "hosted-app"], ["dial-control", "dial-machine"],
+                             ["dial-control", "dial-control"], ["portal-client"]):
+                with self.assertRaises(PermissionError):
+                    authenticate("Bearer " + self.token(aud=audience), FakeJWKS(self.public_key))
+
     def test_unsigned_and_missing_claims_denied(self):
         with patch.dict(os.environ, {"OIDC_ISSUER": "https://iam.example.test", "OIDC_AUDIENCE": "dial-control",
                                   "OIDC_SERVICE_AUDIENCE": "dial-machine"}):

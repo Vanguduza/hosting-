@@ -31,7 +31,9 @@ def environment():
         raise RuntimeError("Human and service token audiences must differ")
     if not os.path.isfile(os.environ["DB_PASSWORD_FILE"]):
         raise RuntimeError("DB password file unavailable")
-    return jwt.PyJWKClient(jwks, cache_jwk_set=True, lifespan=300)
+    from .oidc_login import configuration
+    configuration()
+    return jwt.PyJWKClient(jwks, cache_jwk_set=True, lifespan=300, timeout=5)
 
 
 def database_dsn():
@@ -66,7 +68,8 @@ def authenticate(header, client):
         if not isinstance(claims["sub"], str) or not claims["sub"] or len(claims["sub"]) > 255:
             raise PermissionError("Invalid subject")
         audience = claims["aud"]
-        if audience == os.environ["OIDC_AUDIENCE"]:
+        from .oidc_login import human_audience
+        if human_audience(audience):
             return Identity(claims["sub"])
         if audience != os.environ["OIDC_SERVICE_AUDIENCE"]:
             raise PermissionError("Ambiguous audience")
@@ -127,6 +130,11 @@ def capacity_window(query):
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "DialHosting/0.1"
+
+    def log_request(self, code="-", size="-"):
+        # OAuth callback queries contain authorization codes. Never log queries,
+        # authorization headers or request/response bodies.
+        self.log_message("%s %s %s", self.command, urlsplit(self.path).path, str(code))
 
     def reply(self, code, payload):
         body = json.dumps(payload, default=str, separators=(",", ":")).encode()
@@ -837,6 +845,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/openapi.json" and method == "GET":
             from .openapi import document
             return self.reply(200, document())
+        from .oidc_login import handle as login_request
+        if login_request(self, method, path, parsed_url.query):
+            return
         try:
             identity = authenticate(self.headers.get("Authorization"), self.server.jwks)
             actor = identity.sub

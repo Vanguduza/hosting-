@@ -44,7 +44,7 @@ try {
   await page.route('https://portal.example.test/**', async route => {
     const request = route.request(), url = new URL(request.url()), pathname = url.pathname;
     if (pathname.startsWith('/portal')) {
-      const filename = {'/portal':'index.html','/portal/portal.css':'portal.css','/portal/portal.mjs':'portal.mjs'}[pathname];
+      const filename = {'/portal':'index.html','/portal/portal.css':'portal.css','/portal/portal.mjs':'portal.mjs','/portal/login.mjs':'login.mjs'}[pathname];
       assert.ok(filename, 'Only listed static assets may be loaded');
       return route.fulfill({status: 200, body: await readFile(path.join(assets, filename)), headers: {
         'Content-Type': filename.endsWith('.html') ? 'text/html' : filename.endsWith('.css') ? 'text/css' : 'text/javascript',
@@ -52,6 +52,10 @@ try {
       }});
     }
     assert.ok(pathname.startsWith('/v1/'));
+    if (pathname === '/v1/auth/config') {
+      assert.equal(request.headers().authorization, undefined);
+      return route.fulfill({status:200, json:{enabled:false}});
+    }
     assert.equal(request.headers().authorization, 'Bearer disposable-browser-test');
     assert.equal(request.headers().cookie, undefined);
     let body = {}, status = 200;

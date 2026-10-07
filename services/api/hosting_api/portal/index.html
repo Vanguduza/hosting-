@@ -13,8 +13,9 @@
     <section id="connect-panel" class="connect card">
       <p class="eyebrow">YOUR HOSTING WORKSPACE</p><h1>A clear view of your applications.</h1>
       <p>Connect to view your organizations, manage projects and follow each release.</p>
-      <form id="connect-form"><label for="token">Control API access token</label><input id="token" type="password" required autocomplete="off" maxlength="16384" spellcheck="false"><button type="submit">Connect workspace</button></form>
-      <p class="hint">Use a human OIDC token issued for this control API. The token stays in memory until you disconnect or leave this page.</p>
+      <button id="sign-in" type="button" hidden>Sign in to your workspace</button>
+      <details id="token-connection" open><summary>Connect with an API token</summary><form id="connect-form"><label for="token">Control API access token</label><input id="token" type="password" required autocomplete="off" maxlength="16384" spellcheck="false"><button type="submit">Connect workspace</button></form></details>
+      <p class="hint">Access and refresh tokens stay in memory until you disconnect or leave this page.</p>
     </section>
     <p id="message" role="status" aria-live="polite"></p>
     <div id="workspace" hidden>

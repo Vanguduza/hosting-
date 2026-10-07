@@ -1,3 +1,5 @@
+import {IssuerLogin} from './login.mjs';
+
 export class ApiError extends Error {
   constructor(status, code) {
     super(`Request failed (${status}): ${code}`);
@@ -21,6 +23,10 @@ export class ControlClient {
     this.#session.abort();
     this.#session = new AbortController();
   }
+  renew(token) {
+    if (!this.#token || typeof token !== 'string' || !token || token.length > 16384 || /\s/.test(token)) throw new Error('Session renewal failed.');
+    this.#token = token;
+  }
   async request(path, body) {
     const auditCursor = /^\/v1\/organizations\/[0-9a-f-]{36}\/audit\?after=(0|[1-9][0-9]{0,18})$/.test(path);
     if ((!/^\/v1\/[a-z0-9/-]+$/.test(path) && !(auditCursor && body === undefined)) || path.includes('//')) {
@@ -28,6 +34,8 @@ export class ControlClient {
     }
     if (!this.#token) throw new Error('Connect to your workspace first.');
     const session = this.#session;
+    if (this.beforeRequest) await this.beforeRequest();
+    if (session.signal.aborted) throw new DOMException('Session ended', 'AbortError');
     const headers = {Authorization: `Bearer ${this.#token}`, Accept: 'application/json'};
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     let response;
@@ -180,6 +188,10 @@ export function registrationQuote(request, now = Date.now()) {
 function bootstrap() {
   const $ = id => document.getElementById(id);
   const client = new ControlClient();
+  const login = new IssuerLogin({onToken: (token, renewal) => renewal ? client.renew(token) : client.connect(token),
+    onExpired: () => { disconnect(); message('Your sign-in session ended. Sign in again to continue.', 'error'); }});
+  client.beforeRequest = () => login.ensureFresh();
+  let loginConfig = null, signingIn = false;
   const keys = new MutationKeys();
   const audit = new AuditPages();
   let organizations = [], projects = [], applications = [];
@@ -230,8 +242,8 @@ function bootstrap() {
     $('audit-state').textContent = 'Audit readback not loaded.';
     $('audit-more').hidden = true;
   }
-  function disconnect() {
-    generation++; client.disconnect(); keys.clear(); connected(false); clearDetails(); clearOrganizationViews();
+  function disconnect({preserveTransaction = false} = {}) {
+    generation++; login.disconnect({preserveTransaction}); client.disconnect(); keys.clear(); connected(false); clearDetails(); clearOrganizationViews();
     clearPrivateReceipt();
     organizations = []; projects = []; applications = [];
     for (const id of ['organizations','projects','applications']) $(id).replaceChildren();
@@ -467,8 +479,17 @@ function bootstrap() {
   });
   $('connect-form').addEventListener('submit', event => {
     event.preventDefault(); const token = $('token').value; $('token').value = '';
-    run(async () => { client.connect(token); await loadOrganizations(); });
+    run(async () => { login.disconnect(); client.connect(token); await loadOrganizations(); });
   });
+  $('sign-in').addEventListener('click', () => run(async () => {
+    if (!loginConfig) throw new Error('Sign-in is unavailable.');
+    const target = await login.begin(loginConfig);
+    signingIn = true; window.location.assign(target);
+  }));
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') login.ensureFresh().catch(() => {});
+  });
+  window.addEventListener('pagehide', () => disconnect({preserveTransaction: signingIn}));
   $('disconnect').addEventListener('click', disconnect);
   $('refresh').addEventListener('click', () => run(loadOrganizations));
   $('organizations').addEventListener('change', () => { clearPrivateReceipt(); projects = []; options('projects', [], () => ''); run(loadProjects); });
@@ -548,6 +569,22 @@ function bootstrap() {
     $('receipt').textContent = JSON.stringify(visibleReceipt(data), null, 2);
   });
   connected(false);
+  const callbackURL = window.location.href;
+  const callback = Boolean(new URL(callbackURL).hash) || ['code','state','error','iss'].some(name => new URL(callbackURL).searchParams.has(name));
+  if (callback) window.history.replaceState(null, '', '/portal');
+  (async () => {
+    try {
+      loginConfig = await login.configuration(window.location.origin);
+      $('sign-in').hidden = !loginConfig;
+      $('token-connection').open = !loginConfig;
+      if (callback) await run(async () => {
+        if (!loginConfig) { login.disconnect(); throw new Error('Sign-in is unavailable. Start again after it is configured.'); }
+        await login.complete(callbackURL, loginConfig); await loadOrganizations();
+      });
+    } catch (error) {
+      if (callback && error.name !== 'AbortError') { login.disconnect(); message('Sign-in could not be completed. Start sign-in again.', 'error'); }
+    }
+  })();
 }
 
 if (typeof document !== 'undefined') bootstrap();

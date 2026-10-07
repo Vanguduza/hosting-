@@ -45,6 +45,11 @@ services:
       OIDC_AUDIENCE: ${OIDC_AUDIENCE:?Configure a dedicated API audience}
       OIDC_SERVICE_AUDIENCE: ${OIDC_SERVICE_AUDIENCE:?Configure a distinct service token audience}
       OIDC_JWKS_URL: ${OIDC_JWKS_URL:?Configure a real HTTPS JWKS URL}
+      OIDC_LOGIN_CLIENT_ID: ${OIDC_LOGIN_CLIENT_ID:-}
+      OIDC_AUTHORIZATION_URL: ${OIDC_AUTHORIZATION_URL:-}
+      OIDC_TOKEN_URL: ${OIDC_TOKEN_URL:-}
+      OIDC_LOGIN_REDIRECT_URI: ${OIDC_LOGIN_REDIRECT_URI:-}
+      OIDC_LOGIN_SCOPES: ${OIDC_LOGIN_SCOPES:-}
     secrets: [pg_api]
     depends_on:
       migrate: {condition: service_completed_successfully}

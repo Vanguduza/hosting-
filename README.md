@@ -19,7 +19,9 @@ owners and admins can submit the existing creation/provisioning/release requests
 Tenant audit pagination is available to human members. Owners can manage one-time
 invitations, membership and application-scoped service grants; owners/admins can
 queue rollback to an eligible previous release.
-Token renewal and production login installation remain separate gates.
+Configured [issuer sign-in and renewal](docs/ISSUER_LOGIN.md) now use PKCE and
+validated JWTs, keeping access/refresh tokens in memory. Actual issuer and public
+ingress installation and qualification remain separate gates.
 
 ## Partner Platform integration and completion
 

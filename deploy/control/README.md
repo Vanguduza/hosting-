@@ -1,5 +1,12 @@
 # Control plane local profile
 
+Optional [public-client issuer login](../../docs/ISSUER_LOGIN.md) enables PKCE
+sign-in and in-memory token renewal in `/portal`. Set all four additional login
+fields from verified issuer metadata and configure the API audience scope in
+`OIDC_LOGIN_SCOPES`; the `.env.example` keeps them empty. No client secret is
+required or accepted. This source integration does not configure a real issuer
+or qualify its authentication/recovery/MFA policies.
+
 For a build environment using a custom HTTPS proxy CA, pass a combined trusted
 CA bundle as an optional BuildKit secret:
 

@@ -4,11 +4,13 @@ The implemented development portal is served at `GET /portal` by the control API
 The API Docker image copies its static files with the existing `hosting_api`
 package; no frontend dependency installation or separate server is needed.
 
-Connect using a **human** OIDC token for the configured control API audience.
-The issuer remains responsible for login and token renewal. Application-scoped
+Use [configured issuer sign-in](ISSUER_LOGIN.md) with PKCE and in-memory session
+renewal, or connect using a **human** OIDC token for the control API audience.
+The issuer handles credentials and MFA. Application-scoped
 machine tokens cannot list organizations and cannot use this workspace. The
 portal uses same-origin API requests with bearer authentication, no cookies,
-no redirects and no browser persistence. Disconnect aborts in-flight requests,
+no API redirects and no token persistence. A short-lived tab transaction holds
+only the PKCE verifier/state/nonce while navigating to the issuer. Disconnect aborts in-flight requests,
 removes the token, clears the rendered tenant data and resets forms and retry
 keys. A 401 clears authentication and requests reconnection.
 
@@ -68,7 +70,7 @@ and approval choices; changing the selected quote clears the consent checkbox.
 
 ## Browser boundaries
 
-Only four exact asset paths are served. Unknown paths cannot access files from
+Only five exact asset paths are served. Unknown paths cannot access files from
 the package. Assets have `Cache-Control: no-store`, MIME sniffing protection,
 no-referrer policy and a content policy restricting scripts, styles and API
 connections to the same origin while denying embedding. API data is inserted
@@ -85,7 +87,7 @@ body cancellation stalls; stream errors never expose transport diagnostics.
 
 This completes a development client workspace against implemented contracts.
 It does not implement the complete commercial portal in the blueprint.
-Issuer login/refresh integration, independent HTTPS access installation,
+Live issuer qualification, issuer-wide logout/revocation, independent HTTPS access installation,
 commercial plans/billing, tenant notifications, ownership transfer/export,
 destructive offboarding, MFA/step-up and production
 browser/estate qualification remain open. Neither this UI nor a successful
@@ -93,9 +95,10 @@ readback changes `BUILD_READY`, `RUNTIME_QUALIFIED`, `PRODUCTION_QUALIFIED` or
 owner acceptance.
 
 Run `python3 -m unittest tests.test_portal -v` and
-`node --test tests/test_portal_client.mjs`. CI also runs
+`node --test tests/test_portal_client.mjs tests/test_login_client.mjs`. CI also runs
 `node tests/portal_browser.mjs` with a pinned Playwright installation against
 intercepted API contracts, including mobile layout and actual form submissions.
+CI additionally exercises the complete intercepted issuer redirect/renewal flow.
 These cover asset/browser boundaries,
 request origins, token handling, stale-session rejection, bounded readback,
 401 handling, role affordances, tenant/application-scoped retry keys, audit

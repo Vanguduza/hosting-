@@ -6,6 +6,7 @@ ASSETS = {
     "/portal/": ("index.html", "text/html; charset=utf-8"),
     "/portal/portal.css": ("portal.css", "text/css; charset=utf-8"),
     "/portal/portal.mjs": ("portal.mjs", "text/javascript; charset=utf-8"),
+    "/portal/login.mjs": ("login.mjs", "text/javascript; charset=utf-8"),
 }
 ROOT = Path(__file__).with_name("portal")
 HEADERS = {
