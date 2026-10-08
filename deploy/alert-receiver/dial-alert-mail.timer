@@ -1,0 +1,11 @@
+[Unit]
+Description=Retry DIAL alert email every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+Persistent=true
+Unit=dial-alert-mail.service
+
+[Install]
+WantedBy=timers.target

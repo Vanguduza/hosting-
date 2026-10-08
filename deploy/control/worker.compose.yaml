@@ -1,0 +1,33 @@
+services:
+  worker:
+    build: ../../services/api
+    command: [python, -m, hosting_api.worker]
+    environment:
+      DB_HOST: db
+      DB_NAME: hosting
+      DB_USER: hosting_worker
+      DB_PASSWORD_FILE: /run/secrets/pg_worker
+      NODE_CA_FILE: /run/secrets/node_ca
+      NODE_CERT_FILE: /run/secrets/node_cert
+      NODE_KEY_FILE: /run/secrets/node_key
+      BAO_ADDR: ${BAO_ADDR:?Set a verified HTTPS OpenBao origin}
+      BAO_CA_FILE: /run/secrets/bao_ca
+      BAO_ROLE_ID_FILE: /run/secrets/bao_role_id
+      BAO_SECRET_ID_FILE: /run/secrets/bao_secret_id
+      BAO_KV_MOUNT: ${BAO_KV_MOUNT:-dial}
+    secrets: [pg_worker, node_ca, node_cert, node_key, bao_ca, bao_role_id, bao_secret_id]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    networks: [backend, egress]
+    restart: unless-stopped
+secrets:
+  node_ca: {file: ./.secrets/node_ca.pem}
+  node_cert: {file: ./.secrets/node_client.pem}
+  node_key: {file: ./.secrets/node_client.key}
+  bao_ca: {file: ./.secrets/bao_ca.pem}
+  bao_role_id: {file: ./.secrets/bao_role_id}
+  bao_secret_id: {file: ./.secrets/bao_secret_id}

@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily DIAL control database encrypted backup and restore drill
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=yes
+Unit=dial-control-backup.service
+
+[Install]
+WantedBy=timers.target

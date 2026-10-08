@@ -1,0 +1,11 @@
+[Unit]
+Description=Back up and drill DIAL alert receiver each day
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=30min
+Persistent=true
+Unit=dial-alert-backup.service
+
+[Install]
+WantedBy=timers.target

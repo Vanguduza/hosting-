@@ -1,0 +1,11 @@
+[Unit]
+Description=Inspect DIAL alert receiver queue every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+Persistent=true
+Unit=dial-alert-receiver-health.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,10 @@
+[Unit]
+Description=Close managed PostgreSQL WAL segments hourly
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+Unit=dial-postgres-wal-switch.service
+
+[Install]
+WantedBy=timers.target

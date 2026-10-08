@@ -1,0 +1,10 @@
+[Unit]
+Description=DIAL PostgreSQL physical backup freshness and repository inventory
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/dial-hosting/postgres-physical-backup.env
+ExecStart=/usr/bin/python3 /opt/dial-hosting/backup_health.py postgres-physical ${BACKUP_EVIDENCE_DIR} --max-age-hours 36 --min-instances 1 --check-remote
+NoNewPrivileges=yes
+UMask=0077

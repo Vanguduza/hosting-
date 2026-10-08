@@ -1,0 +1,13 @@
+[Unit]
+Description=DIAL control WAL replication and off-host freshness check
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/dial-hosting/control-wal.env
+ExecStart=/usr/bin/python3 /opt/dial-hosting/control_wal.py health
+TimeoutStartSec=15min
+NoNewPrivileges=yes
+UMask=0077

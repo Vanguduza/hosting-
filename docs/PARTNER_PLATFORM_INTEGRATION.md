@@ -1,8 +1,11 @@
 # DIAL Partner Platform Integration Contract
 
-**Status:** SPECIFIED — no runtime qualification implied  
-**Date:** 2026-10-04  
-**Consumer:** DIAL Partner Business Platform / Partner App Factory in `Vanguduza/dial-business-group`  
+**Status:** SPECIFIED — no runtime qualification implied
+
+**Date:** 2026-10-04
+
+**Consumer:** DIAL Partner Business Platform / Partner App Factory in `Vanguduza/dial-business-group`
+
 **Provider:** DIAL Self-Hosted Client Cloud in this repository
 
 ## Purpose

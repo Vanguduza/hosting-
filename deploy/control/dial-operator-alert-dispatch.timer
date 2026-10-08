@@ -1,0 +1,11 @@
+[Unit]
+Description=Retry DIAL operator alerts every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+Persistent=true
+Unit=dial-operator-alert-dispatch.service
+
+[Install]
+WantedBy=timers.target

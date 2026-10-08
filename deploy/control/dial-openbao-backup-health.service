@@ -1,0 +1,10 @@
+[Unit]
+Description=DIAL OpenBao verified Raft backup freshness
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/dial-hosting/openbao-backup.env
+ExecStart=/usr/bin/python3 /opt/dial-hosting/backup_health.py openbao ${BACKUP_EVIDENCE_DIR} --max-age-hours 36 --min-instances 1 --check-remote
+NoNewPrivileges=yes
+UMask=0077

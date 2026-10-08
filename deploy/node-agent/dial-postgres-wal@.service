@@ -1,0 +1,17 @@
+[Unit]
+Description=DIAL managed PostgreSQL WAL receiver for %i
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=/etc/dial-hosting/postgres-wal.env
+ExecStart=/usr/bin/python3 /opt/dial-hosting/postgres_wal.py stream %i
+Restart=always
+RestartSec=10
+NoNewPrivileges=yes
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

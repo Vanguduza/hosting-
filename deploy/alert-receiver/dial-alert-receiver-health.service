@@ -1,0 +1,14 @@
+[Unit]
+Description=DIAL alert receiver queue freshness
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/python3 /opt/dial-hosting/alert-receiver/alert_receiver.py health /etc/dial-alert-receiver/config.json
+StateDirectory=dial-alert-receiver
+StateDirectoryMode=0700
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+UMask=0077

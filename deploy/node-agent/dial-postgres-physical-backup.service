@@ -1,0 +1,13 @@
+[Unit]
+Description=DIAL PostgreSQL physical base backup and isolated recovery drill
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/dial-hosting/postgres-physical-backup.env
+ExecStart=/usr/bin/python3 /opt/dial-hosting/postgres_physical_backup.py backup-all
+TimeoutStartSec=8h
+NoNewPrivileges=yes
+UMask=0077

@@ -1,0 +1,19 @@
+# Managed PostgreSQL WAL recovery
+
+Each managed PostgreSQL 17 instance has a private Docker network and a persistent data volume. `tools/postgres_wal.py` runs `pg_receivewal --synchronous` through `docker exec` as the instance's PostgreSQL user using its local replication socket and a per-instance physical slot. The receiver writes into a protected spool within that instance's existing volume; neither Restic nor its credentials enter the client database container. The node-side uploader copies completed immutable segments out, encrypts them to an off-host Restic repository, restores and hashes each segment, and issues a protected per-instance receipt. It retains the newest local completed segment for safe stream resumption. The minute archive service fails on an absent or unexpected fleet member; the five-minute health check rejects an inactive slot, excessive lag, overdue uploads, missing remote snapshots, or mismatched receipts.
+
+On each qualified managed PostgreSQL node, configure the same encrypted repository and exact pinned PostgreSQL 17 image used by the physical base backup. Create root-owned mode-0600 `/etc/dial-hosting/postgres-wal.env` from `deploy/node-agent/postgres-wal.env.example`, including a distinct protected `POSTGRES_WAL_EVIDENCE_ROOT`. Initialize the Restic repository and instance-specific semantic probe contracts first. Run `sh deploy/node-agent/install-postgres-wal.sh`. The fleet reconcile timer enrolls existing and newly provisioned labeled instances into independent template stream services; archive and health timers cover all inventoried instances. Stop the instance's stream only for a controlled deprovisioning procedure, and keep its receipts and remote snapshots for the applicable retention period. Monitor failures and disk capacity from another failure domain. A stopped or foreign-labeled instance fails fleet reconciliation rather than disappearing from coverage.
+
+The stream should be active before the first physical base backup chosen for PITR. Hourly `pg_switch_wal()` closes low-traffic segments; the minute uploader then sends completed files off-host. Transactions in a partial segment may still be unavailable after whole-node loss. The schedule does not constitute a guaranteed RPO, and a stalled slot may retain WAL until the primary fills its disk. Qualify actual lag, storage consumption, retention, key custody and cross-host recovery before promising a recovery objective.
+
+To prove recovery from a separate host, bring the protected physical base receipt, the per-instance WAL receipts, the instance's operator-reviewed probe file, Restic access and the pinned image. The source PostgreSQL container and local WAL spool are not required. With the owner-only environment file loaded, run:
+
+```bash
+python3 tools/postgres_wal.py pitr INSTANCE_UUID \
+  --snapshot-id FULL_BASE_RESTIC_ID \
+  --target '2026-10-01T00:00:00+00:00'
+```
+
+The tool binds the base receipt and WAL receipts to the exact instance and PostgreSQL system identifier, checks the base manifest, restores the relevant WAL from encrypted snapshots, starts a disposable network-isolated recovery database, waits until replay pauses at the requested time, and runs the instance-specific SQL assertion inside a read-only transaction. Only a passing drill creates a `PITR_VERIFIED` receipt. A missing WAL segment, mismatched data, wrong image or failed semantic assertion cannot pass. The restore is a drill; importing it into production requires a separate operator-approved cutover, credential rotation and application consistency check.
+
+The disposable runtime test exercises a real private PostgreSQL instance, physical base backup, replication slot, committed changes on both sides of the target time, Restic WAL upload, removal of the source spool, and isolated point-in-time recovery. This is repository proof, not live estate qualification.

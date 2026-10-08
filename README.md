@@ -1,27 +1,79 @@
 # DIAL Self-Hosted Client Cloud
 
-This repository binds the DIAL hosting blueprint to source control and contains the first implemented control-plane contracts. The foundational Rev 1 blueprint and Rev 2 review currently live on branch `codex/hosting-foundation-20260923`; they are not present on `main`, so this README does not treat broken relative paths as current-main artifacts. Their requirements/corrections remain provenance for the implemented control-plane contracts until those pack artifacts are deliberately reconciled onto the canonical branch.
+This repository binds the DIAL hosting blueprint to source control and contains implemented control-plane contracts. The attached [Rev 1 blueprint](development-pack/BLUEPRINT_REV_1.md) remains the requirements source; [Review Rev 2](development-pack/REVIEW_REV_2.md) records corrections and execution gates.
+
+The private control API exposes its currently implemented OpenAPI 3.1 contract at `GET /openapi.json` without a bearer token. It lists only existing routes and validates in CI; it is a client integration contract, not evidence of production qualification. The [tenant audit readback](docs/AUDIT_READBACK.md) verifies hash links during cursor pagination. [Off-host audit checkpoints](docs/AUDIT_CHECKPOINT.md) allow independent recovery comparison. The [event outbox](docs/EVENT_DELIVERY.md) durably sends committed audit facts to a [separate receiver](docs/EVENT_RECEIVER.md) that authenticates and persists the tenant hash chain. [Public release health](docs/RELEASE_HEALTH.md) retains subsequent probe results and audited down/recovery transitions. [Node inventory health](docs/NODE_HEALTH.md) detects stale fleet observations. [Operator alerts](docs/OPERATOR_ALERTS.md) queue and retry signed failure and recovery transitions from the four supervised checks; a separate [alert receiver](docs/ALERT_RECEIVER.md) persists signed requests and retries authenticated SMTP delivery. Hosts, TLS ingress, mail credentials and recovery remain deployment inputs. The [capacity ledger](docs/CAPACITY_ACCOUNTING.md) records tenant reservation intervals from its migration epoch and exposes bounded allocation totals; [operator-set ceilings](docs/RESERVATION_QUOTAS.md) can reject new CPU and memory reservations atomically. Neither is a bill or consumption meter. `DU-005` remains partial because a production API gateway and external ingress policy are not installed.
+
+`python3 tools/hosting_cli.py --base-url https://control.example:443 --token-file /private/control.jwt orgs` runs the operator client against the implemented control API. It accepts an owner-only OIDC token file for the API audience, verifies TLS, refuses cross-origin redirects, and reports an idempotency key for commands that can be retried. Run `--help` for the implemented commands; authentication and production ingress remain separate deployment gates.
 
 ## Current certification
 
-`BUILD_READY=false`, `RUNTIME_QUALIFIED=false`, `PRODUCTION_QUALIFIED=false`. The repository contains working tenant/project intent and audit code, database schema, deterministic pack validation, and a local control-plane profile. Deployment, node agents, build, billing, managed Supabase, restores, and client portal have **not** been implemented or certified. A missing capability is omitted rather than represented by a fake route or green status.
+`BUILD_READY=false`, `RUNTIME_QUALIFIED=false`, `PRODUCTION_QUALIFIED=false`. The repository contains authenticated tenant/project/application APIs with one-time owner-created team invitations; trusted-source build, scan, sign and digest admission; a signed GitHub push receiver and durable isolated builder for registered trusted sources with optional per-repository read-only deploy keys; private release scheduling and an mTLS Docker node agent; rollback and a durable worker with domain proof, Traefik HTTPS routing and public release probes; OpenBao KV v2 credential transport; dedicated private PostgreSQL and Valkey provisioning with application attachment; and a development-only private single-node Garage S3 resource. Operator-configured control/client PostgreSQL, Valkey and Garage backup tools use encrypted off-host Restic targets, isolated semantic restore drills, daily timers and hourly checks for fresh verified receipts and remote snapshot presence. Control and client PostgreSQL each have a distinct physical base backup with required WAL, PostgreSQL manifest verification and an isolated semantic restore. Separate [control](docs/CONTROL_PITR.md) and [managed-client](docs/MANAGED_POSTGRES_PITR.md) WAL streams upload completed segments off-host and drill selected point-in-time restores in disposable PostgreSQL containers. OpenBao Integrated Storage Raft has an off-host encrypted snapshot and guarded disposable-authority restore workflow; CI exercises it against separate disposable Raft servers. A per-host [encrypted recovery catalog](docs/RECOVERY_CATALOG.md) checks live inventory, verified receipts and remote snapshot provenance, publishes its own off-host Restic snapshot, and can be inspected independently on a recovery host. The GitHub path has disposable signed HTTP and database tests, but no live rootless build or private-source qualification. Public ingress and resource provisioning have code and disposable tests, but no live deployment qualification. A production OpenBao HA cluster and cross-host recovery, production object-store durability, PR previews, WAL/PITR installation and estate drills, credential rotation, managed Supabase, billing, provider IAM setup and the complete commercial portal have **not** been implemented or certified. A missing capability is omitted rather than represented by a fake route or green status.
 
+## Client workspace
 
-## DIAL Partner Business Platform integration
+The [client workspace portal](docs/CLIENT_PORTAL.md) is available at `/portal` on
+the control API. It uses a human API-audience token to read tenant projects,
+applications, release health/history, quotas, domains and private data services;
+owners and admins can submit the existing creation/provisioning/release requests.
+Tenant audit pagination is available to human members. Owners can manage one-time
+invitations, membership and application-scoped service grants; owners/admins can
+queue rollback to an eligible previous release.
+Configured [issuer sign-in and renewal](docs/ISSUER_LOGIN.md) now use PKCE and
+validated JWTs, keeping access/refresh tokens in memory. Actual issuer and public
+ingress installation and qualification remain separate gates.
 
-This control plane is the infrastructure authority for DIAL-built supplier and service-provider applications produced by the Partner App Factory. It accepts typed hosting desired state; it does not become supplier, catalogue, pricing, order, booking, payment or marketplace authority.
+[Hosting plan assignments](docs/HOSTING_ENTITLEMENTS.md) now enforce features,
+resource counts and reservation ceilings in PostgreSQL. Workers hold queued work
+when the current plan is unavailable, then resume after renewal without spending
+retry attempts. Protected operators import immutable assignments and enable
+required mode; the portal and CLI expose scoped policy readback. Canonical
+commercial records and billing remain external; the trusted publisher adapter
+below now consumes intent-bound approvals.
 
-See [the Partner Platform Integration Contract](docs/PARTNER_PLATFORM_INTEGRATION.md). This cross-repository contract does not change the certification flags above.
+## Partner Platform integration and completion
 
-## Local control-plane verification
+This platform is the infrastructure authority for DIAL-built partner
+applications. The [Partner Platform contract](docs/PARTNER_PLATFORM_INTEGRATION.md)
+defines typed hosting desired state and preserves the business platform's
+commercial/domain authority. An executable [typed intent preflight](docs/PARTNER_PREFLIGHT.md)
+validates desired state and compares authenticated tenant/release/domain/service
+readback. [Durable intent intake and reconciliation receipts](docs/PARTNER_INTENTS.md)
+now preserve desired state, retries, audit history and actual hosting observations;
+owners/admins can recheck them through the portal or CLI. A [trusted Partner
+approval adapter](docs/PARTNER_AUTHORITY.md) now accepts immutable, expiring and
+revocable exact-intent decisions from a tenant-registered machine publisher,
+checking current plan and administrator membership. Its upstream factory and
+live canonical records remain uninstalled.
+[Reviewed execution profiles](docs/EXECUTION_PROFILES.md) now bind admitted
+artifacts, supported setup, resource ceilings and measured node configurations
+through immutable protected imports. [Scoped Partner secret bindings](docs/PARTNER_SECRETS.md)
+now resolve reviewed references to exact application-scoped OpenBao versions,
+with short-lived private availability checks and redacted portal/CLI readback.
+Live authority/profile review, independent backup integration, automatic multi-resource
+execution and production acceptance remain open.
+
+The [Zimbabwe launch and domain-registration recommendation](docs/ZIMBABWE_HOSTING_AND_DOMAINS.md)
+records `.co.zw` through a ZISPA member and `.com` through an OpenSRS reseller
+integration. Existing domain proof connects names already owned by customers;
+the [manual registration workflow](docs/DOMAIN_REGISTRATION.md) now lets owners
+request a name, review and approve an immutable quote, and observe audited
+operator fulfillment. Registrar account configuration, automatic ordering,
+renewals and production qualification remain open.
+
+See [the repository assessment](docs/REPOSITORY_ASSESSMENT.md) for branch/CI
+evidence, the current continuation and the remaining completion sequence.
+
+## Local checks
 
 ```bash
 python3 tools/packcheck.py
 python3 -m unittest discover -s tests -v
+node --test tests/test_portal_client.mjs
 docker compose -f deploy/control/compose.yaml --env-file deploy/control/.env up --build
 ```
 
-The last command requires Docker, a real OIDC issuer, and the values described in [the control profile](deploy/control/README.md). No example credentials are active defaults. PostgreSQL is private to the Compose network. The HTTP API binds loopback; a TLS/identity-aware ingress is needed before remote access.
+The last command requires Docker, a real OIDC issuer, and the values described in [the control profile](deploy/control/README.md). The worker and agent have separate setup paths. No example credentials are active defaults. PostgreSQL is private to the Compose network. The HTTP API binds loopback; a TLS/identity-aware ingress is needed before remote access. See the [node agent](agents/node-agent/README.md), [backup](docs/BACKUP_AND_RESTORE.md), [Valkey](docs/MANAGED_VALKEY.md) and [object storage](docs/OBJECT_STORAGE.md) runbooks.
 
 ## Design boundaries
 
@@ -30,4 +82,4 @@ The last command requires Docker, a real OIDC issuer, and the values described i
 - Image digests, provider credentials, host topology, and resource budgets are external inputs, never guessed in source.
 - The 8 GB Netcup node is an orchestration target only after measured capacity admission. Production app, database, registry, and Supabase placement remains configurable.
 
-Before adding infrastructure, reconcile changes against the foundational Rev 2 review on `codex/hosting-foundation-20260923` and current repository evidence. No certificate may be promoted by documentation or by passing a unit test alone.
+Read [the review](development-pack/REVIEW_REV_2.md) before adding infrastructure. No certificate may be promoted by documentation or by passing a unit test alone.

@@ -1,0 +1,8 @@
+{
+  "kind": "monitor",
+  "database": "/var/lib/dial-hosting-monitor/alerts.sqlite3",
+  "repository": "s3:https://backup.example.org/dial-monitor",
+  "password_file": "/etc/dial-hosting/monitor-restic-password",
+  "evidence_dir": "/var/lib/dial-hosting-monitor/evidence",
+  "tmp_dir": "/var/lib/dial-hosting-monitor/tmp"
+}

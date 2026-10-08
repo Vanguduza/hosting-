@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DIAL · Hosting workspace</title>
+  <link rel="stylesheet" href="/portal/portal.css">
+  <script type="module" src="/portal/portal.mjs"></script>
+</head>
+<body>
+  <header><a class="brand" href="/portal">DIAL<span> / hosting</span></a><span class="profile">Development profile</span><button id="disconnect" hidden>Disconnect</button></header>
+  <main>
+    <section id="connect-panel" class="connect card">
+      <p class="eyebrow">YOUR HOSTING WORKSPACE</p><h1>A clear view of your applications.</h1>
+      <p>Connect to view your organizations, manage projects and follow each release.</p>
+      <button id="sign-in" type="button" hidden>Sign in to your workspace</button>
+      <details id="token-connection" open><summary>Connect with an API token</summary><form id="connect-form"><label for="token">Control API access token</label><input id="token" type="password" required autocomplete="off" maxlength="16384" spellcheck="false"><button type="submit">Connect workspace</button></form></details>
+      <p class="hint">Access and refresh tokens stay in memory until you disconnect or leave this page.</p>
+    </section>
+    <p id="message" role="status" aria-live="polite"></p>
+    <div id="workspace" hidden>
+      <div class="page-title"><div><p class="eyebrow">WORKSPACE</p><h1>Applications & infrastructure</h1></div><button id="refresh">Refresh</button></div>
+      <nav class="selectors card" aria-label="Workspace selection"><label>Organization<select id="organizations"></select></label><label>Project<select id="projects"></select></label><label>Application<select id="applications"></select></label></nav>
+      <div class="columns">
+        <section class="card"><h2>Reserved capacity</h2><div id="quota"></div><p class="hint">Reservations describe allocated capacity. They are not measured consumption or an invoice.</p></section>
+        <section class="card"><h2>Hosting plan</h2><div id="entitlements"></div><p class="hint">A plan controls new work. Contact your hosting operator to renew or change it.</p></section>
+        <section class="card"><h2>Application health</h2><div id="health"></div><p class="hint">Health comes from the control API's release observations.</p></section>
+      </div>
+      <section class="card"><div class="section-title"><h2>Release history</h2><span id="release-count" class="hint"></span></div><div class="table-wrap"><table><thead><tr><th>State</th><th>Image digest</th><th>Created</th><th>Release</th></tr></thead><tbody id="releases"></tbody></table></div></section>
+      <div class="columns">
+        <section class="card"><h2>Private data services</h2><div id="resources"></div></section>
+        <section class="card"><h2>Domain & traffic</h2><div id="domain"></div><div id="traffic"></div></section>
+      </div>
+      <section class="card"><h2>Recent outages</h2><div id="incidents"></div></section>
+      <section id="intent-panel" class="card" hidden><h2>Hosting requests</h2>
+        <p class="hint">Review the requested application setup and its recorded checks. Recheck records a new observation. Deployment is pending. Partner approval is checked separately below.</p>
+        <div class="table-wrap"><table><thead><tr><th>Template</th><th>Domain</th><th>Recorded state</th><th>Observed</th></tr></thead><tbody id="intents"></tbody></table></div>
+        <form id="intent-form"><label>Request to check<select id="intent-target" name="intent_id" required></select></label><button>Recheck this request</button></form>
+        <p id="intent-profile" class="hint">No reviewed setup check selected.</p>
+        <p id="intent-secrets" class="hint">No application secret check selected.</p>
+        <p id="intent-authority" class="hint">No approval check selected.</p>
+        <p id="intent-observed" class="hint">No recorded observation selected.</p>
+        <div class="table-wrap"><table><thead><tr><th>Check</th><th>Recorded state</th><th>Reason</th></tr></thead><tbody id="intent-stages"></tbody></table></div>
+      </section>
+      <section id="registration-panel" class="card" hidden><h2>Buy a domain</h2>
+        <p class="hint">Owners can request .com or .co.zw registration quotes. Registrar fulfillment is handled by an operator. A request or approval does not register a domain or charge your account.</p>
+        <form id="registration-form"><div class="columns"><label>Domain name<input name="hostname" required maxlength="69" placeholder="yourbusiness.co.zw" autocomplete="off"></label><label>Registration term<select name="term_years"><option value="1">1 year</option><option value="2">2 years (.com)</option><option value="3">3 years (.com)</option><option value="4">4 years (.com)</option><option value="5">5 years (.com)</option></select></label></div><label>Registrant profile reference<input name="registrant_ref" required maxlength="133" placeholder="registrant://profile-reference" autocomplete="off"></label><p class="hint">Support supplies this reference after checking the customer's ownership details. Keep identity documents and personal details off this form.</p><button>Request a registration quote</button><button id="new-registration" type="button">Start a new registration request</button></form>
+        <h3>Registration requests</h3><div class="table-wrap"><table><thead><tr><th>Domain</th><th>State</th><th>Quoted price</th><th>Updated</th></tr></thead><tbody id="registrations"></tbody></table></div>
+        <form id="registration-approve-form"><label>Quote to approve<select id="registration-quote-target" name="registration_id" required></select></label><pre id="registration-quote-details">No current quote selected.</pre><label><input id="registration-consent" type="checkbox" required> I approve the displayed domain, registrant, term, initial price, renewal price and terms.</label><button>Approve this quote</button></form>
+        <form id="registration-cancel-form"><label>Request to cancel<select id="registration-cancel-target" name="registration_id" required></select></label><button>Cancel before registrar processing</button></form>
+        <p class="hint">Fulfillment recorded means an operator retained a registrar receipt. Connect the domain through DNS ownership proof separately. Renewals and automatic registrar integration are not enabled.</p>
+      </section>
+      <section id="create-panel" class="card" hidden><h2>Create in this workspace</h2><div class="columns">
+        <form id="project-form"><h3>Project</h3><label>Name<input name="name" required maxlength="80" pattern="[A-Za-z0-9][A-Za-z0-9 _.\-]{0,79}"></label><button>Create project</button></form>
+        <form id="application-form"><h3>Application</h3><label>Name<input name="name" required maxlength="80" pattern="[A-Za-z0-9][A-Za-z0-9 _.\-]{0,79}"></label><label>Environment<input name="environment" required value="production" pattern="[a-z][a-z0-9\-]{0,31}" maxlength="32"></label><button>Create application</button></form>
+      </div></section>
+      <section id="manage-panel" class="card" hidden><h2>Application changes</h2><div class="columns">
+        <form id="release-form"><h3>Queue a release</h3><label>Admitted image digest<input name="image" required placeholder="registry/path@sha256:…" maxlength="320"></label><div class="columns"><label>Port<input name="port" type="number" required min="1" max="65535" value="8080"></label><label>Health path<input name="health_path" required value="/health" pattern="/[A-Za-z0-9\/_\-]{0,127}" maxlength="128"></label><label>Memory (MB)<input name="memory_mb" type="number" required min="64" max="32768" value="256"></label><label>CPU (millicores)<input name="cpu_milli" type="number" required min="50" max="32000" value="250"></label></div><button>Queue release</button><p class="hint">Requires an admitted artifact, a verified domain and available node capacity. A queued release is not a serving release.</p></form>
+        <div><form id="domain-form"><h3>Verify a domain</h3><label>Hostname<input name="hostname" required maxlength="253" placeholder="app.example.com"></label><button>Request domain proof</button></form><div id="dns-proof" hidden></div><button id="verify-domain" type="button">Check DNS proof</button><p class="hint">Publish the TXT record returned by the API, then check the proof.</p></div>
+      </div><form id="resource-form"><h3>Provision a private data service</h3><div class="columns"><label>Service<select name="kind"><option value="postgres">PostgreSQL</option><option value="valkey">Valkey</option><option value="storage">Development S3 storage</option></select></label><label>Memory (MB)<input name="memory_mb" type="number" required min="256" max="16384" value="256"></label><label>CPU (millicores)<input name="cpu_milli" type="number" required min="100" max="16000" value="250"></label></div><button>Queue provisioning</button><p class="hint">Credentials are delivered to the application by the node agent. Storage uses the development single-node Garage profile.</p></form></section>
+      <section id="rollback-panel" class="card" hidden><h2>Release requests & rollback</h2>
+        <button id="new-release" type="button">Start a new release request</button>
+        <p class="hint">Matching release submissions normally reuse a retry key. Start a new request to deliberately deploy the same specification again.</p>
+        <form id="rollback-form"><label>Previous release<select id="rollback-target" name="target_release_id" required></select></label><button>Queue rollback</button></form>
+        <p class="hint">Rollback queues a new deployment of an eligible previous release. The API checks artifact admission, traffic state, domain proof and capacity again.</p>
+      </section>
+      <section class="card"><div class="section-title"><h2>Audit history</h2><button id="audit-refresh" type="button">Refresh audit</button></div>
+        <p id="audit-state" class="hint" aria-live="polite">Audit readback not loaded.</p>
+        <div class="table-wrap"><table><thead><tr><th>Event</th><th>Action</th><th>Actor</th><th>Committed</th><th>Resource</th></tr></thead><tbody id="audit-events"></tbody></table></div>
+        <button id="audit-more" type="button" hidden>Load next 100 events</button>
+      </section>
+      <section id="access-panel" class="card" hidden><h2>Team & application access</h2>
+        <p class="hint">Only organization owners can manage membership and application service grants.</p>
+        <h3>Team members</h3><div class="table-wrap"><table><thead><tr><th>Identity subject</th><th>Role</th></tr></thead><tbody id="members"></tbody></table></div>
+        <form id="remove-member-form"><label>Admin or viewer to remove<select id="remove-member-target" name="actor_sub" required></select></label><button>Remove selected member</button></form>
+        <div class="columns"><form id="invitation-form"><h3>Invite a team member</h3><label>Role<select name="role"><option value="viewer">Viewer</option><option value="admin">Admin</option></select></label><label>Valid for (hours)<input name="expires_hours" type="number" min="1" max="72" required value="24"></label><button>Create invitation</button><button id="new-invitation" type="button">Start a new invitation request</button></form>
+          <div id="invitation-secret" hidden><h3>One-time invitation token</h3><pre id="invitation-token"></pre><p class="hint">Share this token with the intended person through a verified private channel. Anyone who has it can accept the invitation. It is not returned on a retry.</p><button id="clear-invitation" type="button">Clear token from this page</button></div></div>
+        <h3>Recent invitations</h3><div class="table-wrap"><table><thead><tr><th>Role</th><th>State</th><th>Expires</th><th>Invitation</th></tr></thead><tbody id="invitations"></tbody></table></div>
+        <form id="revoke-invitation-form"><label>Unused invitation to revoke<select id="revoke-invitation-target" name="invitation_id" required></select></label><button>Revoke selected invitation</button></form>
+        <h3>Application service grants</h3><div class="table-wrap"><table><thead><tr><th>Issuer client</th><th>Identity subject</th><th>Application</th><th>State</th></tr></thead><tbody id="service-accounts"></tbody></table></div>
+        <div class="columns"><form id="service-form"><h3>Grant release access to the selected application</h3><label>Issuer client ID<input name="client_id" required maxlength="128" autocomplete="off"></label><label>Machine identity subject<input name="actor_sub" required maxlength="255" autocomplete="off"></label><button>Grant application release access</button><p class="hint">Register an existing machine identity with the separate service audience. The identity provider provisions and rotates its credentials.</p></form>
+          <form id="revoke-service-form"><h3>Revoke an application grant</h3><label>Active service grant<select id="revoke-service-target" name="id" required></select></label><button>Revoke selected service grant</button></form></div>
+      </section>
+      <section class="card"><h2>Accept a team invitation</h2><form id="accept-form"><label>Invitation token<input name="token" type="password" required autocomplete="off" spellcheck="false" pattern="[A-Za-z0-9_\-]{43}" minlength="43" maxlength="43"></label><button>Join the invited organization</button></form><p class="hint">Acceptance binds the invitation to the identity in your connected control API token.</p></section>
+      <section class="card"><h2>Operation receipt</h2><pre id="receipt">No changes requested in this session.</pre></section>
+    </div>
+  </main>
+  <footer>DIAL Self-Hosted Client Cloud · Production qualification remains pending.</footer>
+</body>
+</html>

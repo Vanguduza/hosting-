@@ -1,0 +1,18 @@
+[Unit]
+Description=DIAL event receiver off-host restore freshness
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/dial-event-receiver/restic.env
+ExecStart=/usr/bin/python3 /opt/dial-hosting/event-receiver/alert_receiver_backup.py health --config /etc/dial-event-receiver/backup.json
+StateDirectory=dial-event-receiver
+StateDirectoryMode=0700
+TimeoutStartSec=5min
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+UMask=0077
