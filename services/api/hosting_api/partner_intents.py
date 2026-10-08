@@ -54,8 +54,11 @@ def evaluate(intent, digest, evidence):
     stage('tenant_admin_bindings','MATCHED' if approved else 'BLOCKED',
           'Publisher-bound administrator references resolve to current tenant owners or admins' if approved else
           'Current trusted administrator bindings are unavailable')
-    stage('secret_bindings','BLOCKED' if intent['secret_refs'] else 'NOT_REQUESTED',
-          'Authoritative Partner secret-reference resolution is not installed' if intent['secret_refs'] else 'No secret references requested')
+    secrets=evidence.get('partner_secrets') or {}
+    matched_secrets=secrets.get('state')=='MATCHED' and secrets.get('requested_count')==len(intent['secret_refs']) and secrets.get('matched_count')==len(intent['secret_refs'])
+    stage('secret_bindings',('MATCHED' if matched_secrets else 'BLOCKED') if intent['secret_refs'] else 'NOT_REQUESTED',
+          ('All requested references have current scoped bindings and fresh exact-version OpenBao availability checks; no values are delivered' if matched_secrets else
+           'Current scoped secret availability is missing: '+secrets.get('state','UNCONFIGURED')) if intent['secret_refs'] else 'No secret references requested')
     stage('backups','BLOCKED','Independent backup and restore evidence is not integrated into intent readback')
 
     app, release, node, health, domain = (evidence[key] for key in ('application','release','node','health','domain'))

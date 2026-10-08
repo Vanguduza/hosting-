@@ -3,6 +3,7 @@ import json
 import os
 import re
 import ssl
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -25,6 +26,24 @@ def private_file(path):
 
 def secret_path(resource_id):
     return "resources/" + str(uuid.UUID(str(resource_id)))
+
+
+def partner_secret_path(organization_id,application_id,resource_id):
+    return 'partner-applications/'+'/'.join(str(uuid.UUID(str(value))) for value in
+                                           (organization_id,application_id,resource_id))
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self,req,fp,code,msg,headers,newurl):
+        raise SecretError('OpenBao redirects are refused')
+
+
+def unique_response(pairs):
+    result={}
+    for key,value in pairs:
+        if key in result:raise SecretError('OpenBao duplicate response field')
+        result[key]=value
+    return result
 
 
 class OpenBao:
@@ -60,8 +79,20 @@ class OpenBao:
         body = json.dumps(payload).encode() if payload is not None else None
         request = urllib.request.Request(self.address + "/v1/" + path, body, headers, method=method)
         try:
-            with urllib.request.urlopen(request, timeout=10, context=self.context) as response:
-                return json.load(response)
+            deadline=time.monotonic()+20
+            opener=urllib.request.build_opener(NoRedirect(),urllib.request.HTTPSHandler(context=self.context))
+            with opener.open(request,timeout=10) as response:
+                parts=[];size=0
+                while True:
+                    if time.monotonic()>deadline:raise SecretError('OpenBao response deadline exceeded')
+                    chunk=response.read1(min(16384,262145-size))
+                    if not chunk:break
+                    parts.append(chunk);size+=len(chunk)
+                    if size>262144:raise SecretError('OpenBao response exceeds bounded size')
+                data=b''.join(parts)
+                result=json.loads(data,object_pairs_hook=unique_response)
+                if not isinstance(result,dict):raise SecretError('OpenBao response is invalid')
+                return result
         except urllib.error.HTTPError as exc:
             # Never propagate a body, URL with path metadata, or a token.
             if exc.code in (400, 404) and "options" in (payload or {}):
@@ -73,12 +104,19 @@ class OpenBao:
     def login(self):
         result = self.request("POST", "auth/approle/login", {
             "role_id": private_file(self.role_file), "secret_id": private_file(self.secret_id_file)})
-        token = result.get("auth", {}).get("client_token")
+        auth=result.get('auth')
+        token=auth.get('client_token') if isinstance(auth,dict) else None
         if not isinstance(token, str) or not token:
             raise SecretError("OpenBao login did not issue a token")
         return token
 
     def put(self, resource_id, values, cas):
+        return self._put_path(secret_path(resource_id),values,cas)
+
+    def put_partner(self,organization_id,application_id,resource_id,values,cas):
+        return self._put_path(partner_secret_path(organization_id,application_id,resource_id),values,cas)
+
+    def _put_path(self,path,values,cas):
         if type(cas) is not int or cas < 0 or not isinstance(values, dict) or not values or len(values) > 16:
             raise ValueError("Invalid secret version or values")
         if not all(isinstance(key, str) and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", key)
@@ -87,24 +125,32 @@ class OpenBao:
             raise ValueError("Invalid secret value or key")
         if len(json.dumps(values).encode()) > 60000:
             raise ValueError("Secret payload too large for node delivery")
-        path = secret_path(resource_id)
         result = self.request("POST", self.mount + "/data/" + path,
                               {"options": {"cas": cas}, "data": values}, token=self.login())
-        version = result.get("data", {}).get("version")
+        data=result.get('data')
+        version=data.get('version') if isinstance(data,dict) else None
         if type(version) is not int or version != cas + 1:
             raise SecretError("OpenBao did not confirm requested secret version")
         return version
 
     def get(self, resource_id, version=None):
+        return self._get_path(secret_path(resource_id),version)
+
+    def get_partner(self,organization_id,application_id,resource_id,version):
+        return self._get_path(partner_secret_path(organization_id,application_id,resource_id),version)
+
+    def _get_path(self,secret_path_value,version):
         if version is not None and (type(version) is not int or version < 1):
             raise ValueError("Invalid secret version")
-        path = self.mount + "/data/" + secret_path(resource_id)
+        path = self.mount + "/data/" + secret_path_value
         if version is not None:
             path += "?version=" + str(version)
-        result = self.request("GET", path, token=self.login()).get("data", {})
+        result = self.request("GET", path, token=self.login()).get("data")
+        if not isinstance(result,dict):raise SecretError('OpenBao secret data is unavailable')
         values = result.get("data")
         metadata = result.get("metadata", {})
-        if (not isinstance(values, dict) or not values or
+        if (not isinstance(metadata,dict) or not isinstance(values, dict) or not values or
+                metadata.get('destroyed',False) is not False or metadata.get('deletion_time','') not in ('',None) or
                 type(metadata.get("version")) is not int or
                 (version is not None and metadata["version"] != version)):
             raise SecretError("OpenBao secret data or version missing")

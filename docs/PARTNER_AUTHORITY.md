@@ -152,7 +152,7 @@ hosting runtime evidence in one statement snapshot. Only `ACTIVE` can mark the
 commercial and administrator stages `MATCHED`. Historical evaluations do not
 change when the current approval changes. The separate [reviewed profile registry](EXECUTION_PROFILES.md) can now match
 exact supported setup and measured node bindings. Live profile review, Partner
-secret resolution and independent backup/restore integration remain required;
+live [secret-authority review](PARTNER_SECRETS.md) and independent backup/restore integration remain required;
 all intent receipts still have `NOT_QUALIFIED`, no transformations and no resource
 mutations. Any future execution must revalidate all authority and capacity at
 mutation time; an observation does not reserve permission or capacity.

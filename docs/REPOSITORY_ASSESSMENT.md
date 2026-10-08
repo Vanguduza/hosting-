@@ -15,6 +15,24 @@ The Partner Platform document on main is preserved in this continuation and the
 README describes the executable foundation. The foundation must remain a draft
 until its remaining requirements and qualification gates are satisfied.
 
+## Scoped Partner secret continuation
+
+Migration 031 adds protected immutable application-scoped secret-reference bindings,
+exact-version TLS OpenBao checks and private availability receipts. Readback requires
+all requested references to match their newest active bindings and newest successful
+checks less than five minutes old. Withdrawal, replacement, expiry, missing/invalid
+keys, authority mismatch and failed checks block a match without falling back to old
+success. Checks hold only sanitized availability; secret values and their hashes never
+enter the database, audit/outbox or public readback. The OpenBao namespace separates
+Partner applications from existing managed-service credentials, with scoped ACLs,
+redirect refusal and bounded responses. Portal and CLI expose exact-intent status.
+[The runbook](PARTNER_SECRETS.md) defines provisioning, review, checks and revocation.
+
+No live secret authority has been reviewed or installed. Upstream factory/publisher,
+real profile review, independent backup integration, automatic intent execution and
+production acceptance remain open. All readiness flags remain false. The current API
+has 40 paths / 53 operations and the control schema has 31 migrations.
+
 ## Reviewed execution profile continuation
 
 Migration 030 implements protected immutable imports for tenant/template/version/environment
@@ -27,7 +45,7 @@ Intent rechecks share one statement snapshot with earlier authority/runtime
 observations; matching a profile does not certify the estate or execute resources.
 [The runbook](EXECUTION_PROFILES.md) defines the protected attestation boundary.
 
-Live profile review and upstream factory installation, Partner secret resolution,
+Live profile review and upstream factory installation, real secret authority,
 independent backup integration and automatic intent execution remain open. All
 readiness and acceptance flags remain false. The API now has 39 paths and 52
 operations; the control schema has 30 migrations.
@@ -210,6 +228,16 @@ both browser proofs. The API image packages all four contracts and 30 migrations
 OpenAPI validates 39 paths / 52 operations. Pack, compilation and whitespace
 checks pass. Exact-head CI evidence is recorded on draft PR #1; disposable
 fixtures and protected import interfaces do not promote live qualification.
+
+The scoped secret continuation passes 107 fixture-free Python tests (119 runtime
+checks skip in that invocation; 226 total), 34 JavaScript tests and both pinned
+Chromium browser proofs. Its 14 new PostgreSQL checks pass alongside all 93 prior
+database checks. The real TLS OpenBao fixture verifies scoped ACL denial, CAS,
+pinned versions and deleted/destroyed revisions. Actual HTTPS negative tests refuse
+redirects, oversized bodies and duplicate JSON fields. The API image runs as uid
+10001 with five contracts and 31 migrations; OpenAPI validates 40 paths / 53
+operations. Pack, compilation and whitespace checks pass. Exact-head CI remains
+recorded on draft PR #1; no live authority or production flag is promoted.
 
 ## Remaining deployment inputs
 

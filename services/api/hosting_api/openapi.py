@@ -367,6 +367,14 @@ def document():
          'profile_version_id','profile_sha256','valid_from','valid_until'))
     paths[intents + '/{intent_id}/profile'] = {'get':operation('readExecutionProfile','Read current reviewed setup compatibility',200,profile_summary,
         description='Human owners and administrators only. Checks the latest protected profile version, exact desired setup, admitted digest, bounded budget and fresh measured node bindings. Private qualification evidence and estate details are excluded. A match does not certify the estate or authorize resource execution.')}
+    from .partner_secrets import STATES as secret_states
+    secret_summary=obj({'organization_id':UUID,'application_id':UUID,'intent_id':UUID,
+        'intent_sha256':{'type':'string','pattern':'^[a-f0-9]{64}$'},'observed_at':DATE,'state':{'enum':list(secret_states)},
+        'requested_count':{'type':'integer','minimum':0,'maximum':64},'matched_count':{'type':'integer','minimum':0,'maximum':64},
+        'oldest_checked_at':nullable_date,'valid_until':nullable_date},
+        ('organization_id','application_id','intent_id','intent_sha256','observed_at','state','requested_count','matched_count','oldest_checked_at','valid_until'))
+    paths[intents+'/{intent_id}/secrets']={'get':operation('readPartnerSecretAvailability','Read current scoped secret availability',200,secret_summary,
+        description='Human owners and administrators only. Checks latest protected reference bindings and fresh exact-version OpenBao checks, at most five minutes old. Values, hashes, references, paths, keys, authority configuration and operator identities are excluded. No secret probes, writes or delivery are performed by this endpoint.')}
     replay = response(obj({"id": UUID, "state": STRING, "replayed": {"const": True}},
                           ("id", "state", "replayed")), "Matching idempotent replay")
     registrations = org + "/domain-registrations"

@@ -109,7 +109,7 @@ def parser():
         "applications": ("org", "project"),
         "application-create": ("org", "project", "name", "environment"),
         "intents": ("org", "app"), "intent": ("org", "app", "intent_id"),
-        "intent-submit": ("org", "app"), "intent-reconcile": ("org", "app", "intent_id"), "intent-authority": ("org", "app", "intent_id"), "intent-profile": ("org", "app", "intent_id"),
+        "intent-submit": ("org", "app"), "intent-reconcile": ("org", "app", "intent_id"), "intent-authority": ("org", "app", "intent_id"), "intent-profile": ("org", "app", "intent_id"), "intent-secrets": ("org", "app", "intent_id"),
         "traffic": ("org", "app"), "suspend": ("org", "app", "reason"),
         "resume": ("org", "app", "reason"),
         "domain": ("org", "app"), "domain-register": ("org", "app", "hostname"),
@@ -212,12 +212,12 @@ def request_for(args):
         return path, ({"name": args.name, "environment": args.environment}
                       if name == "application-create" else None), None
     app = org + "/applications/" + identifier(args.app)
-    if name in ('intents', 'intent', 'intent-submit', 'intent-reconcile', 'intent-authority', 'intent-profile'):
+    if name in ('intents', 'intent', 'intent-submit', 'intent-reconcile', 'intent-authority', 'intent-profile', 'intent-secrets'):
         path = app + '/intents'
-        if name in ('intent', 'intent-reconcile', 'intent-authority', 'intent-profile'):
+        if name in ('intent', 'intent-reconcile', 'intent-authority', 'intent-profile', 'intent-secrets'):
             path += '/' + identifier(args.intent_id)
-        if name in ('intent-authority','intent-profile'):
-            return path + ('/authority' if name=='intent-authority' else '/profile'), None, None
+        if name in ('intent-authority','intent-profile','intent-secrets'):
+            return path + {'intent-authority':'/authority','intent-profile':'/profile','intent-secrets':'/secrets'}[name], None, None
         if name == 'intent-submit':
             return path, {'intent': intent_file(args.intent_file)}, None
         if name == 'intent-reconcile':

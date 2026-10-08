@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def check(root=ROOT):
     errors = []
-    for name in ('hosting-intent-v1','partner-authority-source-v1','partner-authority-receipt-v1','execution-profile-v1'):
+    for name in ('hosting-intent-v1','partner-authority-source-v1','partner-authority-receipt-v1','execution-profile-v1','partner-secret-binding-v1'):
         canonical = root / ('contracts/' + name + '.schema.json')
         bundled = root / ('services/api/hosting_api/contracts/' + name + '.schema.json')
         if not canonical.is_file() or not bundled.is_file() or canonical.read_bytes() != bundled.read_bytes():

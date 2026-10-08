@@ -5,7 +5,7 @@ Partner template, runtime, estate and compatibility evidence. The registry binds
 one exact admitted image digest and supported setup to measured node configurations.
 It supplies the profile stage of a HostingIntent observation; importing or matching
 a profile does not certify the platform, provision resources or grant commercial
-approval. Independent [Partner approval](PARTNER_AUTHORITY.md), secret resolution,
+approval. Independent [Partner approval](PARTNER_AUTHORITY.md), [scoped secret availability](PARTNER_SECRETS.md),
 backup evidence and mutation-time admission remain separate requirements.
 
 There are no actual estate qualification records installed in this repository.

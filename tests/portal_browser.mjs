@@ -38,6 +38,7 @@ let intentUnavailable = false, intentMalformed = false, intentBadAcknowledgement
 let authorityUnavailable = false, authorityMalformed = false;
 let authorityState = 'ACTIVE';
 let profileUnavailable=false,profileMalformed=false,profileState='MATCHED';
+let secretUnavailable=false,secretMalformed=false,secretState='MATCHED';
 const intentWrites = [];
 const intentEvaluations = new Map();
 const intentStages = ['intake','commercial_authority','profile_qualification','tenant_admin_bindings','secret_bindings',
@@ -134,6 +135,14 @@ try {
       body = {registrations: registration && registrationOrg === pathname.split('/')[3] ? [registration] : [], fulfillment_mode: 'MANUAL'};
       if (registrationUnavailable) {status = 503; body = {error: 'unavailable'};}
     }
+    else if (pathname.endsWith(`/intents/${intentId}/secrets`)) {
+      assert.ok(['owner','admin'].includes(role),'Viewer must not load secret readback');
+      body={organization_id:orgA,application_id:app,intent_id:intentId,intent_sha256:hostingIntent.intent_sha256,
+        observed_at:'2026-10-08T00:00:00Z',state:secretState,requested_count:1,matched_count:secretState==='MATCHED'?1:0,
+        oldest_checked_at:secretState==='MATCHED'?'2026-10-07T23:59:00Z':null,valid_until:secretState==='MATCHED'?'2026-10-08T00:04:00Z':null};
+      if (secretUnavailable) {status=503;body={error:'unavailable'};}
+      if (secretMalformed) body={...body,intent_sha256:'c'.repeat(64)};
+    }
     else if (pathname.endsWith(`/intents/${intentId}/profile`)) {
       assert.ok(['owner','admin'].includes(role),'Viewer must not load profile readback');
       body={organization_id:orgA,application_id:app,intent_id:intentId,intent_sha256:hostingIntent.intent_sha256,
@@ -209,6 +218,18 @@ try {
   assert.equal(await page.locator('#intent-panel').isVisible(), true);
   await page.waitForFunction(() => document.getElementById('intent-authority').textContent.includes('Approval was valid at this check'));
   await page.waitForFunction(() => document.getElementById('intent-profile').textContent.includes('Requested setup matched its review'));
+  await page.waitForFunction(() => document.getElementById('intent-secrets').textContent.includes('All requested secrets were available'));
+  for (const bad of ['unavailable','malformed']) {
+    secretUnavailable=bad==='unavailable';secretMalformed=bad==='malformed';
+    await page.locator('#refresh').click();
+    await page.waitForFunction(() => document.getElementById('intent-secrets').textContent==='Application secret readback is unavailable.');
+  }
+  secretUnavailable=false;secretMalformed=false;secretState='BINDING_DISABLED';
+  await page.locator('#refresh').click();
+  await page.waitForFunction(() => document.getElementById('intent-secrets').textContent.includes('Secret access was withdrawn'));
+  secretState='MATCHED';
+  await page.locator('#refresh').click();
+  await page.waitForFunction(() => document.getElementById('intent-secrets').textContent.includes('All requested secrets were available'));
   for (const bad of ['unavailable','malformed']) {
     profileUnavailable=bad==='unavailable';profileMalformed=bad==='malformed';
     await page.locator('#refresh').click();
@@ -258,6 +279,7 @@ try {
   assert.equal(await page.locator('#intent-observed').textContent(),'No recorded observation selected.');
   assert.equal(await page.locator('#intent-authority').textContent(),'No approval check selected.');
   assert.equal(await page.locator('#intent-profile').textContent(),'No reviewed setup check selected.');
+  assert.equal(await page.locator('#intent-secrets').textContent(),'No application secret check selected.');
   await page.locator('#release-form input[name=image]').fill('registry.test/web@sha256:'+'b'.repeat(64));
   await page.locator('#release-form button').click();
   await page.waitForFunction(() => document.getElementById('message').textContent === 'Readback updated.');
@@ -321,6 +343,7 @@ try {
     assert.equal(await page.locator('#intent-observed').textContent(),'No recorded observation selected.');
   assert.equal(await page.locator('#intent-authority').textContent(),'No approval check selected.');
   assert.equal(await page.locator('#intent-profile').textContent(),'No reviewed setup check selected.');
+  assert.equal(await page.locator('#intent-secrets').textContent(),'No application secret check selected.');
     assert.match(await page.locator('#intents').textContent(),/unavailable/);
   }
   intentUnavailable = false; intentMalformed = false;

@@ -108,9 +108,11 @@ limited to the development environment. Managed Supabase and redundant S3 remain
 blocked. Without a registered publisher and fresh exact-intent approval,
 partner/commercial/admin bindings remain blocked. The [reviewed profile registry](EXECUTION_PROFILES.md) can match the profile
 stage when an exact current protected review and measured node bindings exist.
-Live template/estate review, secret-reference resolution and independent
-backup/restore receipts remain required; recording a review or observing
-commercial, profile, health and resource matches does not certify the platform.
+The [scoped secret resolver](PARTNER_SECRETS.md) can match secret availability when
+every requested reference has a current reviewed binding and fresh exact-version
+OpenBao check. Live template/estate and secret-authority reviews, and independent
+backup/restore receipts remain required; recording reviews or observing commercial,
+profile, secret, health and resource matches does not certify the platform.
 Future orchestration must install these authorities and recheck policy/capacity
 before any resource mutation; this intake cannot bypass them.
 

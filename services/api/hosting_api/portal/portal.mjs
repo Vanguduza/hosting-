@@ -272,6 +272,27 @@ export function profileView(data, orgId, appId, intentId, intentHash) {
   return data;
 }
 
+export function secretView(data,orgId,appId,intentId,intentHash) {
+  const date=value => typeof value==='string' && /([+-][0-9]{2}:[0-9]{2}|Z)$/.test(value) && Number.isFinite(Date.parse(value));
+  const fields=['organization_id','application_id','intent_id','intent_sha256','observed_at','state',
+    'requested_count','matched_count','oldest_checked_at','valid_until'];
+  if (!data || Object.keys(data).length!==fields.length || fields.some(key => !Object.hasOwn(data,key)) ||
+      data.organization_id!==orgId || data.application_id!==appId || data.intent_id!==intentId ||
+      typeof data.intent_sha256!=='string' || !/^[a-f0-9]{64}$/.test(data.intent_sha256) || data.intent_sha256!==intentHash || !date(data.observed_at) ||
+      !['NOT_REQUESTED','UNCONFIGURED','BINDING_DISABLED','NOT_YET_VALID','EXPIRED','CHECK_REQUIRED','CHECK_FAILED','MATCHED'].includes(data.state) ||
+      ['requested_count','matched_count'].some(key => !Number.isInteger(data[key]) || data[key]<0 || data[key]>64) ||
+      data.matched_count>data.requested_count || (data.state==='NOT_REQUESTED')!==(data.requested_count===0) ||
+      (data.state==='MATCHED' && (data.requested_count===0 || data.matched_count!==data.requested_count ||
+        !date(data.oldest_checked_at) || !date(data.valid_until) || Date.parse(data.oldest_checked_at)>Date.parse(data.observed_at) ||
+        Date.parse(data.oldest_checked_at)<Date.parse(data.observed_at)-300000 || Date.parse(data.valid_until)<=Date.parse(data.observed_at) ||
+        Date.parse(data.valid_until)>Date.parse(data.oldest_checked_at)+300000)) ||
+      (data.state!=='MATCHED' && (data.oldest_checked_at!==null || data.valid_until!==null ||
+        (data.requested_count>0 && data.matched_count===data.requested_count)))) {
+    throw new Error('Application secret readback is unavailable.');
+  }
+  return data;
+}
+
 function bootstrap() {
   const $ = id => document.getElementById(id);
   const client = new ControlClient();
@@ -316,6 +337,7 @@ function bootstrap() {
     intents = []; $('intent-observed').textContent = 'No recorded observation selected.';
     authorityGeneration++; $('intent-authority').textContent = 'No approval check selected.';
     $('intent-profile').textContent = 'No reviewed setup check selected.';
+    $('intent-secrets').textContent = 'No application secret check selected.';
     $('release-count').textContent = ''; $('dns-proof').hidden = true;
     $('rollback-target').replaceChildren();
   }
@@ -504,6 +526,7 @@ function bootstrap() {
   function showIntent() {
     authorityGeneration++; $('intent-authority').textContent = 'No approval check selected.';
     $('intent-profile').textContent = 'No reviewed setup check selected.';
+    $('intent-secrets').textContent = 'No application secret check selected.';
     $('intent-stages').replaceChildren();
     const row = intents.find(item => item.id === $('intent-target').value);
     if (!row) { $('intent-observed').textContent = 'No recorded observation selected.'; updateActions(); return; }
@@ -522,6 +545,7 @@ function bootstrap() {
     updateActions();
     void showAuthority(row);
     void showProfile(row);
+    void showSecrets(row);
   }
   async function showAuthority(row) {
     const current = generation, ticket = authorityGeneration;
@@ -563,6 +587,26 @@ function bootstrap() {
       if (!selected()) return;
       if (error instanceof ApiError && error.status===401) { disconnect();message('Your session ended. Sign in again.','error');return; }
       $('intent-profile').textContent='Reviewed setup readback is unavailable.';
+    }
+  }
+  async function showSecrets(row) {
+    const current=generation,ticket=authorityGeneration;
+    const org=$('organizations').value,app=$('applications').value;
+    const selected=() => current===generation && ticket===authorityGeneration && org===$('organizations').value &&
+      app===$('applications').value && row.id===$('intent-target').value;
+    $('intent-secrets').textContent='Checking application secrets…';
+    try {
+      const data=secretView(await client.request(`${appPath()}/intents/${row.id}/secrets`),org,app,row.id,row.intent_sha256);
+      if (!selected()) return;
+      const labels={NOT_REQUESTED:'No application secrets requested',UNCONFIGURED:'Secret setup is pending',BINDING_DISABLED:'Secret access was withdrawn',
+        NOT_YET_VALID:'Secret access is not yet active',EXPIRED:'Secret access expired',CHECK_REQUIRED:'A fresh secret availability check is required',
+        CHECK_FAILED:'The latest secret availability check failed',MATCHED:'All requested secrets were available at this check'};
+      $('intent-secrets').textContent=`Latest secret check: ${date(data.observed_at)} · ${labels[data.state]}.` +
+        (data.state==='MATCHED' ? ` Availability valid until ${date(data.valid_until)}. Recheck the request to record a new observation.` : '');
+    } catch (error) {
+      if (!selected()) return;
+      if (error instanceof ApiError && error.status===401) { disconnect();message('Your session ended. Sign in again.','error');return; }
+      $('intent-secrets').textContent='Application secret readback is unavailable.';
     }
   }
   async function loadDetails() {

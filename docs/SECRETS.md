@@ -57,3 +57,8 @@ TLS identity, audit device, restricted network, HA and a tested cross-host
 recovery drill. Node-local copies must be included
 in host compromise and credential-rotation procedures. The disposable CI
 OpenBao dev server is isolated to CI and is never a deployment profile.
+
+Partner HostingIntent references use the separate application-scoped namespace and
+protected binding/check workflow in [PARTNER_SECRETS.md](PARTNER_SECRETS.md). Runtime
+managed-service AppRoles need no access to those paths. Short-lived availability
+readback conveys no plaintext and authorizes no deployment or secret delivery.

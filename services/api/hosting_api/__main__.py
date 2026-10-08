@@ -967,6 +967,9 @@ class Handler(BaseHTTPRequestHandler):
                     elif match := re.fullmatch(r"/v1/organizations/([0-9a-f-]{36})/applications/([0-9a-f-]{36})/storage", path):
                         result = self.storage(conn, uuid.UUID(match.group(1)), uuid.UUID(match.group(2)),
                                               actor, body, method, request_id)
+                    elif method == 'GET' and (match := re.fullmatch(r'/v1/organizations/([0-9a-f-]{36})/applications/([0-9a-f-]{36})/intents/([0-9a-f-]{36})/secrets',path)):
+                        from .partner_secrets import handle as secrets_request
+                        result = secrets_request(conn,uuid.UUID(match.group(1)),uuid.UUID(match.group(2)),uuid.UUID(match.group(3)))
                     elif method == 'GET' and (match := re.fullmatch(r'/v1/organizations/([0-9a-f-]{36})/applications/([0-9a-f-]{36})/intents/([0-9a-f-]{36})/profile',path)):
                         from .execution_profiles import handle as profile_request
                         result = profile_request(conn,uuid.UUID(match.group(1)),uuid.UUID(match.group(2)),uuid.UUID(match.group(3)))

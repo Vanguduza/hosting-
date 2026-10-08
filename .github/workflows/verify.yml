@@ -118,6 +118,7 @@ jobs:
       - run: python -m unittest tests.test_partner_intent_integration -v
       - run: python -m unittest tests.test_partner_authority_integration -v
       - run: python -m unittest tests.test_execution_profile_integration -v
+      - run: python -m unittest tests.test_partner_secret_integration -v
       - run: python -m unittest tests.test_control_backup_runtime -v
         env:
           CONTROL_RUNTIME_BACKUP: '1'

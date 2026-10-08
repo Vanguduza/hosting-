@@ -92,6 +92,24 @@ class OpenBaoIntegration(unittest.TestCase):
                 self.assertEqual(bao.put(resource, {"postgres_password": "ci-revision-two"}, 1), 2)
                 self.assertEqual(bao.get(resource, version=1), (1, {"postgres_password": "ci-revision-one"}))
                 self.assertEqual(bao.get(resource, version=2), (2, {"postgres_password": "ci-revision-two"}))
+                # Partner paths have an explicit tenant/application namespace and independent ACL.
+                org,app,secret=(uuid.uuid4() for _ in range(3))
+                from hosting_api.secrets import partner_secret_path
+                path='dial/data/'+partner_secret_path(org,app,secret)
+                with self.assertRaises(SecretError):bao.put_partner(org,app,secret,{'password':'scoped-ci-value'},0)
+                root_request('PUT','sys/policies/acl/dial-worker',{'policy':
+                    'path "dial/data/resources/*" { capabilities = ["create", "read", "update"] }\n'+
+                    'path "'+path+'" { capabilities = ["create", "read", "update"] }'})
+                self.assertEqual(bao.put_partner(org,app,secret,{'password':'scoped-ci-one'},0),1)
+                self.assertEqual(bao.put_partner(org,app,secret,{'password':'scoped-ci-two'},1),2)
+                self.assertEqual(bao.get_partner(org,app,secret,1),(1,{'password':'scoped-ci-one'}))
+                with self.assertRaises(SecretError):bao.get_partner(uuid.uuid4(),app,secret,1)
+                with self.assertRaises(SecretError):bao.get_partner(org,uuid.uuid4(),secret,1)
+                root_request('POST','dial/delete/'+partner_secret_path(org,app,secret),{'versions':[1]})
+                with self.assertRaises(SecretError):bao.get_partner(org,app,secret,1)
+                self.assertEqual(bao.get_partner(org,app,secret,2),(2,{'password':'scoped-ci-two'}))
+                root_request('POST','dial/destroy/'+partner_secret_path(org,app,secret),{'versions':[2]})
+                with self.assertRaises(SecretError):bao.get_partner(org,app,secret,2)
             finally:
                 subprocess.run(["docker", "rm", "-f", name], capture_output=True)
 

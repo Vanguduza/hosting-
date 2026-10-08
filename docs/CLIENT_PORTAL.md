@@ -126,3 +126,9 @@ Hosting requests panel, bound to the selected intent hash. They show current
 setup compatibility separately from historical observations and Partner approval.
 Private reviewer evidence and estate details are withheld; profile imports use
 protected operator tools outside the portal.
+
+[Application secret availability](PARTNER_SECRETS.md) now appears as another current
+exact-intent check. All requested references must match current reviewed bindings
+and fresh OpenBao checks. Values, hashes, private references and authority details
+are withheld. Failed/malformed readback, withdrawal and selection/session changes
+clear success status; the portal performs no secret writes, probes or delivery.

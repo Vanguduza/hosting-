@@ -142,6 +142,7 @@ class CliTests(unittest.TestCase):
             "projects": [one], "project-create": [one, "alpha"],
             "applications": [one, two], "application-create": [one, two, "api", "production"],
             "intents": [one, three], "intent": [one, three, four], "intent-reconcile": [one, three, four],
+            "intent-profile": [one, three, four], "intent-authority": [one, three, four], "intent-secrets": [one, three, four],
             "traffic": [one, three], "suspend": [one, three, "Owner requested pause"],
             "resume": [one, three, "Owner requested resume"],
             "domain": [one, three], "domain-register": [one, three, "app.example.org"],

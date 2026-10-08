@@ -13,6 +13,8 @@ from hosting_api.secrets import OpenBao
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("resource_id", type=uuid.UUID)
+    parser.add_argument('--partner-organization',type=uuid.UUID)
+    parser.add_argument('--partner-application',type=uuid.UUID)
     parser.add_argument("--cas", type=int, required=True,
                         help="0 creates once; the current version is required for rotation")
     args = parser.parse_args()
@@ -22,7 +24,10 @@ def main():
     if len(body) > 65536:
         parser.error("Secret payload too large")
     values = json.loads(body)
-    version = OpenBao.environment().put(args.resource_id, values, args.cas)
+    if bool(args.partner_organization)!=bool(args.partner_application):
+        parser.error('Partner organization and application must be supplied together')
+    bao=OpenBao.environment()
+    version = bao.put_partner(args.partner_organization,args.partner_application,args.resource_id,values,args.cas) if args.partner_organization else bao.put(args.resource_id,values,args.cas)
     print(json.dumps({"resource_id": str(args.resource_id), "version": version, "state": "STORED"}))
 
 

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {ControlClient, MutationKeys, ApiError, canManage, canManageAccess, AuditPages,
-  invitationState, visibleReceipt, registrationQuote, entitlementView, intentObservation, authorityView, profileView} from '../services/api/hosting_api/portal/portal.mjs';
+  invitationState, visibleReceipt, registrationQuote, entitlementView, intentObservation, authorityView, profileView, secretView} from '../services/api/hosting_api/portal/portal.mjs';
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), {
   status, headers: {'Content-Type': 'application/json'},
@@ -321,4 +321,24 @@ test('reviewed setup readback is exact-intent bound and fails closed on borrowed
   const absent={...data,state:'UNCONFIGURED',profile_version_id:null,profile_sha256:null,valid_from:null,valid_until:null};
   assert.equal(profileView(absent,org,app,intent,'a'.repeat(64)).state,'UNCONFIGURED');
   assert.throws(() => profileView({...absent,profile_version_id:org},org,app,intent,'a'.repeat(64)));
+});
+
+test('secret availability binds the exact intent, complete scope and short freshness window', () => {
+  const org='11111111-1111-4111-8111-111111111111',app='22222222-2222-4222-8222-222222222222',intent='33333333-3333-4333-8333-333333333333';
+  const data={organization_id:org,application_id:app,intent_id:intent,intent_sha256:'a'.repeat(64),
+    observed_at:'2026-10-08T00:00:00Z',state:'MATCHED',requested_count:2,matched_count:2,
+    oldest_checked_at:'2026-10-07T23:59:00Z',valid_until:'2026-10-08T00:04:00Z'};
+  assert.equal(secretView(data,org,app,intent,'a'.repeat(64)),data);
+  for (const patch of [{organization_id:app},{application_id:org},{intent_id:app},{intent_sha256:'c'.repeat(64)},
+    {state:'QUALIFIED'},{requested_count:1},{matched_count:1},{requested_count:true},{matched_count:65},
+    {oldest_checked_at:null},{oldest_checked_at:'2026-10-07T23:54:59Z'},{oldest_checked_at:'2026-10-08T00:01:00Z'},
+    {valid_until:data.observed_at},{valid_until:'2026-10-08T00:05:01Z'},{observed_at:'invalid'},
+    {state:'CHECK_FAILED'},{references:['secret://private/ref#1']},{values:{password:'private-value'}}]) {
+    assert.throws(() => secretView({...data,...patch},org,app,intent,'a'.repeat(64)));
+  }
+  const absent={...data,state:'UNCONFIGURED',matched_count:1,oldest_checked_at:null,valid_until:null};
+  assert.equal(secretView(absent,org,app,intent,'a'.repeat(64)),absent);
+  const none={...absent,state:'NOT_REQUESTED',requested_count:0,matched_count:0};
+  assert.equal(secretView(none,org,app,intent,'a'.repeat(64)),none);
+  assert.throws(() => secretView({...none,state:'MATCHED'},org,app,intent,'a'.repeat(64)));
 });
