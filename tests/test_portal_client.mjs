@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {ControlClient, MutationKeys, ApiError, canManage, canManageAccess, AuditPages,
-  invitationState, visibleReceipt, registrationQuote, entitlementView, intentObservation} from '../services/api/hosting_api/portal/portal.mjs';
+  invitationState, visibleReceipt, registrationQuote, entitlementView, intentObservation, authorityView} from '../services/api/hosting_api/portal/portal.mjs';
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), {
   status, headers: {'Content-Type': 'application/json'},
@@ -288,4 +288,21 @@ test('the client permits only the exact read-only audit cursor query', async () 
     `/v1/organizations/${org}/projects?after=0`]) await assert.rejects(client.request(path), /Invalid/);
   await assert.rejects(client.request(`/v1/organizations/${org}/audit?after=0`, {}), /Invalid/);
   assert.equal(calls.length, 1);
+});
+
+test('approval readback binds the selection and preserves bigint sequences', () => {
+  const org='11111111-1111-4111-8111-111111111111', app='22222222-2222-4222-8222-222222222222', intent='33333333-3333-4333-8333-333333333333';
+  const data={organization_id:org,application_id:app,intent_id:intent,observed_at:'2026-10-08T00:00:00Z',
+    state:'ACTIVE',source_version_id:org,receipt_id:app,sequence:'9223372036854775807',issued_at:'2026-10-07T23:59:59Z',
+    valid_until:'2026-10-08T00:05:00Z',hosting_entitlement_version_id:intent};
+  assert.equal(authorityView(data,org,app,intent).sequence,'9223372036854775807');
+  for (const patch of [{organization_id:app},{application_id:org},{intent_id:org},{state:'APPROVED'},
+    {sequence:'9223372036854775808'},{sequence:1},{issued_at:'2026-10-08T00:01:00Z'},
+    {valid_until:'2026-10-07T00:00:00Z'},{observed_at:'2026-10-08T00:00:00'},{receipt_id:null},
+    {source_version_id:null},{actor_sub:'private-identity'}]) {
+    assert.throws(() => authorityView({...data,...patch},org,app,intent));
+  }
+  const absent={...data,state:'UNCONFIGURED',source_version_id:null,receipt_id:null,sequence:null,
+    issued_at:null,valid_until:null,hosting_entitlement_version_id:null};
+  assert.equal(authorityView(absent,org,app,intent).state,'UNCONFIGURED');
 });

@@ -69,6 +69,7 @@ class AuthTests(unittest.TestCase):
             identity = authenticate("Bearer " + self.token(aud="dial-machine", client_id="ci-deployer"),
                                     FakeJWKS(self.public_key))
             self.assertEqual((identity.sub, identity.client_id), ("user-123", "ci-deployer"))
+            self.assertEqual(identity.issuer, "https://iam.example.test")
             for claims in ({"aud": "dial-machine"}, {"aud": ["dial-control", "dial-machine"],
                            "client_id": "ci-deployer"}, {"aud": "another-app", "client_id": "ci-deployer"}):
                 with self.assertRaises(PermissionError):
@@ -84,3 +85,10 @@ class AuthTests(unittest.TestCase):
                              (release.removesuffix("/releases") + "/traffic", "POST"),
                              ("/v1/organizations", "GET"), (release, "DELETE")):
             self.assertFalse(service_route_allowed(path, method))
+
+    def test_publisher_can_only_enter_the_exact_authority_post_route(self):
+        base='/v1/organizations/'+'a'*36+'/applications/'+'b'*36+'/intents/'+'c'*36
+        self.assertTrue(service_route_allowed(base+'/authority','POST'))
+        for path,method in ((base+'/authority','GET'),(base,'GET'),(base+'/reconcile','POST'),
+                            (base+'/authority/','POST'),(base+'/authority/extra','POST')):
+            self.assertFalse(service_route_allowed(path,method))

@@ -1,6 +1,6 @@
 # Repository assessment and completion sequence
 
-Assessment date: 2026-10-07.
+Assessment date: 2026-10-08.
 
 ## Verified starting state
 
@@ -14,6 +14,23 @@ The branches diverged from `baeb36c8b0c771c537fa0c85d64805befca296ed`.
 The Partner Platform document on main is preserved in this continuation and the
 README describes the executable foundation. The foundation must remain a draft
 until its remaining requirements and qualification gates are satisfied.
+
+## Trusted Partner approval continuation
+
+Migration 029 adds a protected, immutable tenant publisher registry and exact-intent
+commercial/admin decision intake. Registered service identity, source version,
+intent hash, monotonic sequence, bounded validity, current hosting plan and existing
+administrator membership are checked. Current redacted readback and historical
+intent evaluation remain separate; revocation, expiry and source/plan/admin changes
+fail closed without falling back to older approval. Portal and CLI readback and a
+private-file publisher helper are implemented. No resources or memberships are
+mutated by this adapter. [The runbook](PARTNER_AUTHORITY.md) pins the inspected
+upstream canon and explains the trust boundary and uninstalled factory.
+
+No live publisher configuration, upstream commercial authority, template/estate
+qualification, Partner secret resolution, independent backup integration or
+automatic intent execution is installed. All readiness and qualification flags
+remain false. The API now exposes 38 paths and 51 operations, with 29 migrations.
 
 ## This continuation
 
@@ -46,12 +63,12 @@ renewals and late disconnected-session replies fail closed. This advances
 DU-003/DU-053/DU-054 without creating an issuer account or promoting live IAM
 qualification. Hosting roles still come from the canonical database.
 
-The current continuation implements [hosting-local entitlement controls](HOSTING_ENTITLEMENTS.md):
+A prior continuation implements [hosting-local entitlement controls](HOSTING_ENTITLEMENTS.md):
 immutable operator assignments, tenant readback, feature/count/capacity admission,
 worker execution holds and renewal, and registrar purchase-start checks. Migration
 027 preserves existing tenants in an explicit compatibility mode; production
-requires the protected one-way required-assignment switch. Canonical commercial
-entitlement import, billing and offboarding remain open. This advances DU-004 and
+requires the protected one-way required-assignment switch. Live canonical commercial
+records, billing and offboarding remain open. This advances DU-004 and
 DU-046 while all readiness/acceptance flags remain false.
 
 The next continuation adds [durable Partner intent intake and reconciliation
@@ -59,7 +76,7 @@ receipts](PARTNER_INTENTS.md): immutable tenant/application-bound requests,
 consistent hosting evidence, historical retry receipts, transactional audit/outbox
 and owner/admin portal/CLI readback. Migration 028 enforces payload/receipt
 validation, tenant access and immutable history. It advances intake and readback;
-automatic multi-resource provisioning and canonical authority remain open.
+automatic multi-resource provisioning and live canonical authority remain open.
 
 Runtime verification found and corrected a private-umask Valkey ACL permission
 failure, added immutable retry repair, and made API/fixture Docker copies readable
@@ -158,6 +175,16 @@ These are software/fixture checks; all readiness and qualification flags remain 
 The storage CI fixture installs pinned Restic 0.18.1 from its verified archive,
 with bounded HTTPS download attempts, after a runner stalled in Ubuntu package
 installation. Production tool installation remains a separate deployment step.
+
+The trusted publisher continuation passes 97 fixture-free Python tests, with 89
+runtime checks skipped in that invocation, and 32 JavaScript client tests. All 15
+new PostgreSQL authority tests pass, including signed-JWT HTTP intake, publisher
+isolation, source disable serialization, exact bindings, expiry/revocation, plan
+and membership changes, retry races, immutable/private history and audit rollback.
+The existing 62 PostgreSQL tests and both Chromium browser proofs pass separately.
+OpenAPI advertises 38 paths / 51 operations; startup applies 29 migrations and
+refuses ledger drift. Exact-head CI evidence is recorded on draft PR #1; none of
+these disposable checks promotes production qualification.
 
 ## Remaining deployment inputs
 

@@ -387,7 +387,7 @@ class EntitlementIntegration(unittest.TestCase):
         server.jwks = object()
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
-        identity = SimpleNamespace(sub=self.owner, client_id=None)
+        identity = SimpleNamespace(sub=self.owner, client_id=None, issuer=None)
         path = '/v1/organizations/' + str(self.org)
         def request(method, suffix, body=None):
             conn = http.client.HTTPConnection('127.0.0.1',server.server_port,timeout=5)

@@ -28,7 +28,8 @@ resource counts and reservation ceilings in PostgreSQL. Workers hold queued work
 when the current plan is unavailable, then resume after renewal without spending
 retry attempts. Protected operators import immutable assignments and enable
 required mode; the portal and CLI expose scoped policy readback. Canonical
-commercial entitlement import and billing remain open.
+commercial records and billing remain external; the trusted publisher adapter
+below now consumes intent-bound approvals.
 
 ## Partner Platform integration and completion
 
@@ -39,8 +40,12 @@ commercial/domain authority. An executable [typed intent preflight](docs/PARTNER
 validates desired state and compares authenticated tenant/release/domain/service
 readback. [Durable intent intake and reconciliation receipts](docs/PARTNER_INTENTS.md)
 now preserve desired state, retries, audit history and actual hosting observations;
-owners/admins can recheck them through the portal or CLI. Automatic multi-resource
-provisioning, authoritative Partner bindings and qualification remain open.
+owners/admins can recheck them through the portal or CLI. A [trusted Partner
+approval adapter](docs/PARTNER_AUTHORITY.md) now accepts immutable, expiring and
+revocable exact-intent decisions from a tenant-registered machine publisher,
+checking current plan and administrator membership. Its upstream factory and
+live canonical records remain uninstalled. Automatic multi-resource provisioning,
+profile/secret/backup qualification and production acceptance remain open.
 
 The [Zimbabwe launch and domain-registration recommendation](docs/ZIMBABWE_HOSTING_AND_DOMAINS.md)
 records `.co.zw` through a ZISPA member and `.com` through an OpenSRS reseller

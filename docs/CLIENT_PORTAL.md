@@ -115,3 +115,8 @@ These cover asset/browser boundaries,
 request origins, token handling, stale-session rejection, bounded readback,
 401 handling, role affordances, tenant/application-scoped retry keys, audit
 pagination, private invitation handling, membership/grant operations and rollback.
+
+The Hosting requests panel also shows a [current Partner approval check](PARTNER_AUTHORITY.md),
+separate from immutable historical observations. Only a registered machine
+publisher can supply approval; there is no human approval upload form. Failed or
+malformed readback and selection changes clear the prior check.

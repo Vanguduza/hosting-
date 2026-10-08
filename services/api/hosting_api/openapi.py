@@ -336,6 +336,27 @@ def document():
         intent_reconciliation, obj({'idempotency_key': UUID}, ('idempotency_key',)),
         description='Human owners and administrators only. Matching key replays the original historical observation; use a fresh key to observe again. All receipts remain NOT_QUALIFIED.')}
     paths[intents + '/{intent_id}/reconcile']['post']['responses']['200'] = response(intent_reconciliation, 'Original historical observation replay')
+    from .partner_authority import RECEIPT_SCHEMA
+    nullable_uuid = {'oneOf': [UUID, {'type': 'null'}]}
+    nullable_date = {'oneOf': [DATE, {'type': 'null'}]}
+    authority_summary = obj({'organization_id': UUID, 'application_id': UUID, 'intent_id': UUID,
+        'observed_at': DATE, 'state': {'enum': ['UNCONFIGURED','SOURCE_DISABLED','AWAITING_RECEIPT',
+            'REVOKED','SOURCE_CHANGED','EXPIRED','PLAN_UNAVAILABLE','PLAN_CHANGED','ADMIN_UNBOUND','ACTIVE']},
+        'source_version_id': nullable_uuid, 'receipt_id': nullable_uuid,
+        'sequence': {'oneOf': [{'type': 'string', 'pattern': '^[1-9][0-9]{0,18}$'}, {'type': 'null'}]},
+        'issued_at': nullable_date, 'valid_until': nullable_date, 'hosting_entitlement_version_id': nullable_uuid},
+        ('organization_id','application_id','intent_id','observed_at','state','source_version_id','receipt_id',
+         'sequence','issued_at','valid_until','hosting_entitlement_version_id'))
+    authority_ack = obj({'id': UUID,'state': {'const':'RECORDED'},
+        'sequence': {'type':'string','pattern':'^[1-9][0-9]{0,18}$'},'replayed': {'type':'boolean'}},
+        ('id','state','sequence','replayed'))
+    paths[intents + '/{intent_id}/authority'] = {
+        'get': operation('readPartnerAuthority','Read current redacted approval status',200,authority_summary,
+            description='Human owners and administrators only. Current checks are separate from immutable historical intent observations.'),
+        'post': operation('publishPartnerAuthority','Record an existing external Partner decision',201,authority_ack,
+            obj({'receipt': RECEIPT_SCHEMA},('receipt',)),
+            description='Registered machine publisher only, with exact verified issuer, service audience, client and subject. Tenant source version, intent hash, monotonic sequence, expiry, current hosting plan and existing administrator bindings are checked. No resources, memberships or business records are changed.')}
+    paths[intents + '/{intent_id}/authority']['post']['responses']['200'] = response(authority_ack,'Original immutable receipt replay; does not reactivate an approval')
     replay = response(obj({"id": UUID, "state": STRING, "replayed": {"const": True}},
                           ("id", "state", "replayed")), "Matching idempotent replay")
     registrations = org + "/domain-registrations"

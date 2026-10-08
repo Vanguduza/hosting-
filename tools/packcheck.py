@@ -10,10 +10,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def check(root=ROOT):
     errors = []
-    canonical = root / 'contracts/hosting-intent-v1.schema.json'
-    bundled = root / 'services/api/hosting_api/contracts/hosting-intent-v1.schema.json'
-    if not canonical.is_file() or not bundled.is_file() or canonical.read_bytes() != bundled.read_bytes():
-        errors.append('HostingIntent API contract differs from canonical schema')
+    for name in ('hosting-intent-v1','partner-authority-source-v1','partner-authority-receipt-v1'):
+        canonical = root / ('contracts/' + name + '.schema.json')
+        bundled = root / ('services/api/hosting_api/contracts/' + name + '.schema.json')
+        if not canonical.is_file() or not bundled.is_file() or canonical.read_bytes() != bundled.read_bytes():
+            errors.append(name + ' API contract differs from canonical schema')
     manifest = json.loads((root / "development-pack/PACK_MANIFEST.json").read_text())
     blueprint = (root / manifest["source_blueprint"]).read_text()
     review = root / manifest["review"]

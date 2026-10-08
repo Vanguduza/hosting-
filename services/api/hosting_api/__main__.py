@@ -49,6 +49,7 @@ def database_dsn():
 class Identity:
     sub: str
     client_id: str | None = None
+    issuer: str | None = None
 
 
 def authenticate(header, client):
@@ -70,13 +71,13 @@ def authenticate(header, client):
         audience = claims["aud"]
         from .oidc_login import human_audience
         if human_audience(audience):
-            return Identity(claims["sub"])
+            return Identity(claims["sub"], issuer=claims["iss"])
         if audience != os.environ["OIDC_SERVICE_AUDIENCE"]:
             raise PermissionError("Ambiguous audience")
         client_id = claims.get("client_id")
         if not isinstance(client_id, str) or not 1 <= len(client_id) <= 128:
             raise PermissionError("Invalid client")
-        return Identity(claims["sub"], client_id)
+        return Identity(claims["sub"], client_id, claims["iss"])
     except (jwt.PyJWTError, ValueError) as exc:
         raise PermissionError("Invalid bearer token") from exc
 
@@ -84,7 +85,9 @@ def authenticate(header, client):
 def service_route_allowed(path, method):
     return (path == "/ready" and method == "GET") or bool(
         method in ("GET", "POST") and re.fullmatch(
-            r"/v1/organizations/[0-9a-f-]{36}/applications/[0-9a-f-]{36}/releases", path))
+            r"/v1/organizations/[0-9a-f-]{36}/applications/[0-9a-f-]{36}/releases", path)) or bool(
+        method == "POST" and re.fullmatch(
+            r"/v1/organizations/[0-9a-f-]{36}/applications/[0-9a-f-]{36}/intents/[0-9a-f-]{36}/authority", path))
 
 
 def record(conn, org_id, actor, action, resource, request_id):
@@ -854,7 +857,7 @@ class Handler(BaseHTTPRequestHandler):
             if identity.client_id and not service_route_allowed(path, method):
                 return self.reply(404, {"error": "not_found"})
             if method == "POST":
-                intent_route = bool(re.fullmatch(r'/v1/organizations/[0-9a-f-]{36}/applications/[0-9a-f-]{36}/intents(?:/[0-9a-f-]{36}/reconcile)?',path))
+                intent_route = bool(re.fullmatch(r'/v1/organizations/[0-9a-f-]{36}/applications/[0-9a-f-]{36}/intents(?:/[0-9a-f-]{36}/(?:reconcile|authority))?',path))
                 length = int(self.headers.get("Content-Length", "0"))
                 if length < 1 or length > (65536 if intent_route else 8192):
                     return self.reply(413, {"error": "body_size"})
@@ -878,6 +881,7 @@ class Handler(BaseHTTPRequestHandler):
                     conn.execute("SELECT set_config('hosting.actor_sub', %s, true)", (actor,))
                     conn.execute("SELECT set_config('hosting.auth_kind', %s, true)",
                                  ("service" if identity.client_id else "human",))
+                    conn.execute("SELECT set_config('hosting.token_issuer', %s, true)", (identity.issuer or "",))
                     if identity.client_id:
                         conn.execute("SELECT set_config('hosting.service_client_id', %s, true)", (identity.client_id,))
                     if path == "/ready" and method == "GET":
@@ -963,6 +967,10 @@ class Handler(BaseHTTPRequestHandler):
                     elif match := re.fullmatch(r"/v1/organizations/([0-9a-f-]{36})/applications/([0-9a-f-]{36})/storage", path):
                         result = self.storage(conn, uuid.UUID(match.group(1)), uuid.UUID(match.group(2)),
                                               actor, body, method, request_id)
+                    elif match := re.fullmatch(r'/v1/organizations/([0-9a-f-]{36})/applications/([0-9a-f-]{36})/intents/([0-9a-f-]{36})/authority',path):
+                        from .partner_authority import handle as authority_request
+                        result = authority_request(conn,uuid.UUID(match.group(1)),uuid.UUID(match.group(2)),
+                                                   uuid.UUID(match.group(3)),body,method)
                     elif match := re.fullmatch(r'/v1/organizations/([0-9a-f-]{36})/applications/([0-9a-f-]{36})/intents(?:/([0-9a-f-]{36})(/reconcile)?)?',path):
                         from .partner_intents import handle as intent_request
                         result = intent_request(self,conn,uuid.UUID(match.group(1)),uuid.UUID(match.group(2)),actor,body,method,
@@ -992,7 +1000,8 @@ class Handler(BaseHTTPRequestHandler):
         except psycopg.errors.UniqueViolation:
             return self.reply(409, {"error": "conflict"})
         except psycopg.errors.RaiseException as exc:
-            if exc.diag.message_primary in ('quota_exceeded', 'entitlement_unavailable', 'entitlement_limit_exceeded','intent_binding_conflict'):
+            if exc.diag.message_primary in ('quota_exceeded', 'entitlement_unavailable', 'entitlement_limit_exceeded','intent_binding_conflict',
+                    'authority_binding_conflict','authority_source_changed','authority_revision_conflict','authority_expired'):
                 return self.reply(409, {"error": exc.diag.message_primary})
             return self.reply(503, {"error": "unavailable"})
         except Exception:

@@ -3,8 +3,10 @@
 Migration 027 adds hosting-local, protected operator assignments. The tenant API
 cannot purchase, assign, renew or edit a plan. No prices, discounts, invoices,
 payment collection or automatic product activation are inferred from these
-records. The Partner Platform's canonical commercial entitlement adapter remains
-open; readback identifies this authority as `OPERATOR_ASSIGNED`.
+records. Readback identifies this authority as `OPERATOR_ASSIGNED`. The separate
+[Partner publisher adapter](PARTNER_AUTHORITY.md) now consumes intent-bound
+commercial/admin approvals and requires the current local plan version. Its live
+upstream publisher and commercial records remain uninstalled.
 
 ## Import and launch enforcement
 

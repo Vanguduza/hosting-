@@ -41,9 +41,15 @@ def evaluate(intent, digest, evidence):
         stages.append({'stage':name,'state':state,'reason':reason})
 
     stage('intake','RECORDED','Typed desired state is recorded without transformations')
-    stage('commercial_authority','BLOCKED','Canonical partner, account and commercial entitlement resolution is not installed')
+    authority = evidence.get('partner_authority') or {}
+    approved = authority.get('state') == 'ACTIVE'
+    stage('commercial_authority','MATCHED' if approved else 'BLOCKED',
+          'Registered Partner publisher asserts the exact intent and current hosting plan' if approved else
+          'Current trusted Partner approval is unavailable: ' + authority.get('state','UNCONFIGURED'))
     stage('profile_qualification','BLOCKED','Qualified template, runtime and estate profile registry is not installed')
-    stage('tenant_admin_bindings','BLOCKED','Canonical administrator reference resolution is not installed')
+    stage('tenant_admin_bindings','MATCHED' if approved else 'BLOCKED',
+          'Publisher-bound administrator references resolve to current tenant owners or admins' if approved else
+          'Current trusted administrator bindings are unavailable')
     stage('secret_bindings','BLOCKED' if intent['secret_refs'] else 'NOT_REQUESTED',
           'Authoritative Partner secret-reference resolution is not installed' if intent['secret_refs'] else 'No secret references requested')
     stage('backups','BLOCKED','Independent backup and restore evidence is not integrated into intent readback')

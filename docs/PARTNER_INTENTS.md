@@ -8,9 +8,10 @@ one validator; pack checks require the packaged schema to match the canonical fi
 
 This is the durable intake and observation part of the controller. Recording or
 rechecking an intent does **not** create projects, applications, releases, data
-services, domain registrations, credentials or capacity reservations. It neither
-resolves commercial authority nor grants referenced administrators access. There
-is no automatic execution worker for intents yet. Every receipt is
+services, domain registrations, credentials or capacity reservations. The
+[trusted publisher adapter](PARTNER_AUTHORITY.md) can resolve commercial and
+administrator assertions at observation time; it grants no administrator access.
+There is no automatic execution worker for intents yet. Every receipt is
 `NOT_QUALIFIED`, with `resource_mutations_performed=false` and no transformations.
 Database constraints reject receipts that claim qualification or transformations.
 
@@ -104,9 +105,10 @@ not reserve that headroom or guarantee it will still be available on execution.
 Profile compatibility here describes implemented development resources, not a
 qualified estate. `postgres-private-v1` observes private PostgreSQL; Garage is
 limited to the development environment. Managed Supabase and redundant S3 remain
-blocked. Canonical partner/commercial/admin resolution, qualified template and
-estate profiles, secret-reference resolution and independent backup/restore
-receipts remain explicit blockers, even when health and resource stages match.
+blocked. Without a registered publisher and fresh exact-intent approval,
+partner/commercial/admin bindings remain blocked. Qualified template and estate
+profiles, secret-reference resolution and independent backup/restore receipts
+remain explicit blockers, even when commercial, health and resource stages match.
 Future orchestration must install these authorities and recheck policy/capacity
 before any resource mutation; this intake cannot bypass them.
 
@@ -126,6 +128,6 @@ historical replay, audit/outbox rollback, allocation accounting, HTTP limits and
 public response schemas. Pure evaluator and browser tests cover wrong/stale
 evidence, unavailable readback and authority boundaries.
 
-Automatic multi-resource execution, authoritative bindings, profile qualification,
+Automatic multi-resource execution, live upstream authority installation, profile qualification,
 backup receipt integration and production acceptance remain unfinished. These
 tests do not promote readiness or qualification flags.

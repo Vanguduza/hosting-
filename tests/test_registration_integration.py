@@ -191,7 +191,7 @@ class RegistrationIntegration(unittest.TestCase):
         server.jwks = None
         worker = threading.Thread(target=server.serve_forever, daemon=True)
         worker.start()
-        identity = SimpleNamespace(sub=self.owner, client_id=None)
+        identity = SimpleNamespace(sub=self.owner, client_id=None, issuer=None)
         path = f"/v1/organizations/{self.org}/domain-registrations"
         def request(method, route, body=None):
             connection = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)

@@ -231,6 +231,27 @@ export function intentObservation(row, appId) {
   return receipt;
 }
 
+export function authorityView(data, orgId, appId, intentId) {
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+  const date = value => typeof value === 'string' && /([+-][0-9]{2}:[0-9]{2}|Z)$/.test(value) && Number.isFinite(Date.parse(value));
+  const fields = ['organization_id','application_id','intent_id','observed_at','state','source_version_id',
+    'receipt_id','sequence','issued_at','valid_until','hosting_entitlement_version_id'];
+  if (!data || Object.keys(data).length !== fields.length || fields.some(key => !Object.hasOwn(data,key)) ||
+      data.organization_id !== orgId || data.application_id !== appId || data.intent_id !== intentId ||
+      !date(data.observed_at) || !['UNCONFIGURED','SOURCE_DISABLED','AWAITING_RECEIPT','REVOKED','SOURCE_CHANGED',
+        'EXPIRED','PLAN_UNAVAILABLE','PLAN_CHANGED','ADMIN_UNBOUND','ACTIVE'].includes(data.state) ||
+      ['source_version_id','receipt_id','hosting_entitlement_version_id'].some(key => data[key] !== null && !uuid.test(data[key])) ||
+      (data.sequence !== null && (typeof data.sequence !== 'string' || !/^[1-9][0-9]{0,18}$/.test(data.sequence) || BigInt(data.sequence) > 9223372036854775807n)) ||
+      ['issued_at','valid_until'].some(key => data[key] !== null && !date(data[key])) ||
+      (data.receipt_id === null && ['sequence','issued_at','valid_until','hosting_entitlement_version_id'].some(key => data[key] !== null)) ||
+      (data.receipt_id !== null && (data.sequence === null || data.issued_at === null)) ||
+      (data.state === 'ACTIVE' && (!data.source_version_id || !data.receipt_id || !data.hosting_entitlement_version_id ||
+        !date(data.valid_until) || Date.parse(data.valid_until) <= Date.parse(data.observed_at) || Date.parse(data.issued_at) > Date.parse(data.observed_at)))) {
+    throw new Error('Partner approval readback is unavailable.');
+  }
+  return data;
+}
+
 function bootstrap() {
   const $ = id => document.getElementById(id);
   const client = new ControlClient();
@@ -243,6 +264,7 @@ function bootstrap() {
   let organizations = [], projects = [], applications = [];
   let members = [], invitations = [], grants = [];
   let registrations = [], intents = [];
+  let authorityGeneration = 0;
   let generation = 0, busy = false;
   const element = (tag, text = '', className = '') => {
     const node = document.createElement(tag); node.textContent = text;
@@ -272,6 +294,7 @@ function bootstrap() {
   function clearDetails() {
     for (const id of ['quota','entitlements','health','resources','domain','traffic','incidents','releases','dns-proof','intents','intent-target','intent-stages']) $(id).replaceChildren();
     intents = []; $('intent-observed').textContent = 'No recorded observation selected.';
+    authorityGeneration++; $('intent-authority').textContent = 'No approval check selected.';
     $('release-count').textContent = ''; $('dns-proof').hidden = true;
     $('rollback-target').replaceChildren();
   }
@@ -458,6 +481,7 @@ function bootstrap() {
     }
   }
   function showIntent() {
+    authorityGeneration++; $('intent-authority').textContent = 'No approval check selected.';
     $('intent-stages').replaceChildren();
     const row = intents.find(item => item.id === $('intent-target').value);
     if (!row) { $('intent-observed').textContent = 'No recorded observation selected.'; updateActions(); return; }
@@ -474,6 +498,28 @@ function bootstrap() {
       $('intent-stages').append(line);
     }
     updateActions();
+    void showAuthority(row);
+  }
+  async function showAuthority(row) {
+    const current = generation, ticket = authorityGeneration;
+    const org = $('organizations').value, app = $('applications').value;
+    const selected = () => current === generation && ticket === authorityGeneration &&
+      org === $('organizations').value && app === $('applications').value && row.id === $('intent-target').value;
+    $('intent-authority').textContent = 'Checking Partner approval…';
+    try {
+      const data = authorityView(await client.request(`${appPath()}/intents/${row.id}/authority`),org,app,row.id);
+      if (!selected()) return;
+      const labels = {UNCONFIGURED:'Publisher setup is pending',SOURCE_DISABLED:'Publisher is disabled',
+        AWAITING_RECEIPT:'Awaiting Partner approval',REVOKED:'Approval was revoked',SOURCE_CHANGED:'Publisher changed; a new approval is required',
+        EXPIRED:'Approval expired',PLAN_UNAVAILABLE:'Hosting plan is unavailable',PLAN_CHANGED:'Hosting plan changed; a new approval is required',
+        ADMIN_UNBOUND:'Administrator access changed; approval is unavailable',ACTIVE:'Approval was valid at this check'};
+      $('intent-authority').textContent = `Latest approval check: ${date(data.observed_at)} · ${labels[data.state]}.` +
+        (data.state === 'ACTIVE' ? ` Valid until ${date(data.valid_until)}. Recheck the request to record a new observation.` : '');
+    } catch (error) {
+      if (!selected()) return;
+      if (error instanceof ApiError && error.status === 401) { disconnect(); message('Your session ended. Sign in again.', 'error'); return; }
+      $('intent-authority').textContent = 'Partner approval readback is unavailable.';
+    }
   }
   async function loadDetails() {
     clearDetails(); const current = generation;

@@ -35,6 +35,8 @@ let role = 'admin', unavailable = false, expired = false, removedMember = false,
 let planStatus = 'ACTIVE';
 const intentId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 let intentUnavailable = false, intentMalformed = false, intentBadAcknowledgement = false;
+let authorityUnavailable = false, authorityMalformed = false;
+let authorityState = 'ACTIVE';
 const intentWrites = [];
 const intentEvaluations = new Map();
 const intentStages = ['intake','commercial_authority','profile_qualification','tenant_admin_bindings','secret_bindings',
@@ -131,6 +133,14 @@ try {
       body = {registrations: registration && registrationOrg === pathname.split('/')[3] ? [registration] : [], fulfillment_mode: 'MANUAL'};
       if (registrationUnavailable) {status = 503; body = {error: 'unavailable'};}
     }
+    else if (pathname.endsWith(`/intents/${intentId}/authority`)) {
+      assert.ok(['owner','admin'].includes(role),'Viewer must not load approval readback');
+      body={organization_id:orgA,application_id:app,intent_id:intentId,observed_at:'2026-10-08T00:00:00Z',
+        state:authorityState,source_version_id:orgA,receipt_id:orgB,sequence:'9223372036854775807',
+        issued_at:'2026-10-07T23:59:59Z',valid_until:'2026-10-08T00:05:00Z',hosting_entitlement_version_id:orgB};
+      if (authorityUnavailable) {status=503;body={error:'unavailable'};}
+      if (authorityMalformed) body={...body,intent_id:orgB};
+    }
     else if (pathname.endsWith('/intents')) {
       assert.ok(['owner','admin'].includes(role),'Viewer must not load private intent observations');
       body = {intents: pathname.split('/')[3] === orgA ? [hostingIntent] : []};
@@ -188,6 +198,18 @@ try {
   assert.equal(await page.locator('#access-panel').isVisible(), false);
   assert.equal(await page.locator('#registration-panel').isVisible(), false);
   assert.equal(await page.locator('#intent-panel').isVisible(), true);
+  await page.waitForFunction(() => document.getElementById('intent-authority').textContent.includes('Approval was valid at this check'));
+  for (const bad of ['unavailable','malformed']) {
+    authorityUnavailable=bad==='unavailable'; authorityMalformed=bad==='malformed';
+    await page.locator('#refresh').click();
+    await page.waitForFunction(() => document.getElementById('intent-authority').textContent === 'Partner approval readback is unavailable.');
+  }
+  authorityUnavailable=false; authorityMalformed=false; authorityState='REVOKED';
+  await page.locator('#refresh').click();
+  await page.waitForFunction(() => document.getElementById('intent-authority').textContent.includes('Approval was revoked'));
+  authorityState='ACTIVE';
+  await page.locator('#refresh').click();
+  await page.waitForFunction(() => document.getElementById('intent-authority').textContent.includes('Approval was valid at this check'));
   assert.equal(await page.locator('#intent-stages tr').count(), 17);
   assert.match(await page.locator('#intent-observed').textContent(), /Recorded observation:.*NOT_QUALIFIED/);
   assert.match(await page.locator('#intent-stages').textContent(), /<img src=x onerror=alert\(1\)>/);
@@ -213,6 +235,7 @@ try {
   assert.equal(await page.locator('#intent-stages tr').count(), 0);
   assert.equal(await page.locator('#intent-form button').isDisabled(),true);
   assert.equal(await page.locator('#intent-observed').textContent(),'No recorded observation selected.');
+  assert.equal(await page.locator('#intent-authority').textContent(),'No approval check selected.');
   await page.locator('#release-form input[name=image]').fill('registry.test/web@sha256:'+'b'.repeat(64));
   await page.locator('#release-form button').click();
   await page.waitForFunction(() => document.getElementById('message').textContent === 'Readback updated.');
@@ -274,6 +297,7 @@ try {
     assert.equal(await page.locator('#intent-stages tr').count(),0);
     assert.equal(await page.locator('#intent-form button').isDisabled(),true);
     assert.equal(await page.locator('#intent-observed').textContent(),'No recorded observation selected.');
+  assert.equal(await page.locator('#intent-authority').textContent(),'No approval check selected.');
     assert.match(await page.locator('#intents').textContent(),/unavailable/);
   }
   intentUnavailable = false; intentMalformed = false;
