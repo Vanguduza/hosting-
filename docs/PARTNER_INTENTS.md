@@ -106,9 +106,11 @@ Profile compatibility here describes implemented development resources, not a
 qualified estate. `postgres-private-v1` observes private PostgreSQL; Garage is
 limited to the development environment. Managed Supabase and redundant S3 remain
 blocked. Without a registered publisher and fresh exact-intent approval,
-partner/commercial/admin bindings remain blocked. Qualified template and estate
-profiles, secret-reference resolution and independent backup/restore receipts
-remain explicit blockers, even when commercial, health and resource stages match.
+partner/commercial/admin bindings remain blocked. The [reviewed profile registry](EXECUTION_PROFILES.md) can match the profile
+stage when an exact current protected review and measured node bindings exist.
+Live template/estate review, secret-reference resolution and independent
+backup/restore receipts remain required; recording a review or observing
+commercial, profile, health and resource matches does not certify the platform.
 Future orchestration must install these authorities and recheck policy/capacity
 before any resource mutation; this intake cannot bypass them.
 
@@ -128,6 +130,6 @@ historical replay, audit/outbox rollback, allocation accounting, HTTP limits and
 public response schemas. Pure evaluator and browser tests cover wrong/stale
 evidence, unavailable readback and authority boundaries.
 
-Automatic multi-resource execution, live upstream authority installation, profile qualification,
+Automatic multi-resource execution, live upstream authority installation and profile review,
 backup receipt integration and production acceptance remain unfinished. These
 tests do not promote readiness or qualification flags.

@@ -252,6 +252,26 @@ export function authorityView(data, orgId, appId, intentId) {
   return data;
 }
 
+export function profileView(data, orgId, appId, intentId, intentHash) {
+  const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+  const digest=value => typeof value==='string' && /^[a-f0-9]{64}$/.test(value);
+  const date=value => typeof value==='string' && /([+-][0-9]{2}:[0-9]{2}|Z)$/.test(value) && Number.isFinite(Date.parse(value));
+  const fields=['organization_id','application_id','intent_id','intent_sha256','observed_at','state',
+    'profile_version_id','profile_sha256','valid_from','valid_until'];
+  if (!data || Object.keys(data).length!==fields.length || fields.some(key => !Object.hasOwn(data,key)) ||
+      data.organization_id!==orgId || data.application_id!==appId || data.intent_id!==intentId ||
+      !digest(data.intent_sha256) || data.intent_sha256!==intentHash || !date(data.observed_at) ||
+      !['UNCONFIGURED','DISABLED','NOT_YET_VALID','EXPIRED','PROFILE_MISMATCH','ARTIFACT_UNADMITTED',
+        'BUDGET_EXCEEDED','NO_ELIGIBLE_NODE','PLACEMENT_MISMATCH','MATCHED'].includes(data.state) ||
+      (data.state==='UNCONFIGURED' && fields.slice(6).some(key => data[key]!==null)) ||
+      (data.state!=='UNCONFIGURED' && (!uuid.test(data.profile_version_id) || !digest(data.profile_sha256) ||
+        !date(data.valid_from) || !date(data.valid_until) || Date.parse(data.valid_until)<=Date.parse(data.valid_from))) ||
+      (data.state==='MATCHED' && (Date.parse(data.valid_from)>Date.parse(data.observed_at) || Date.parse(data.valid_until)<=Date.parse(data.observed_at)))) {
+    throw new Error('Reviewed setup readback is unavailable.');
+  }
+  return data;
+}
+
 function bootstrap() {
   const $ = id => document.getElementById(id);
   const client = new ControlClient();
@@ -295,6 +315,7 @@ function bootstrap() {
     for (const id of ['quota','entitlements','health','resources','domain','traffic','incidents','releases','dns-proof','intents','intent-target','intent-stages']) $(id).replaceChildren();
     intents = []; $('intent-observed').textContent = 'No recorded observation selected.';
     authorityGeneration++; $('intent-authority').textContent = 'No approval check selected.';
+    $('intent-profile').textContent = 'No reviewed setup check selected.';
     $('release-count').textContent = ''; $('dns-proof').hidden = true;
     $('rollback-target').replaceChildren();
   }
@@ -482,6 +503,7 @@ function bootstrap() {
   }
   function showIntent() {
     authorityGeneration++; $('intent-authority').textContent = 'No approval check selected.';
+    $('intent-profile').textContent = 'No reviewed setup check selected.';
     $('intent-stages').replaceChildren();
     const row = intents.find(item => item.id === $('intent-target').value);
     if (!row) { $('intent-observed').textContent = 'No recorded observation selected.'; updateActions(); return; }
@@ -499,6 +521,7 @@ function bootstrap() {
     }
     updateActions();
     void showAuthority(row);
+    void showProfile(row);
   }
   async function showAuthority(row) {
     const current = generation, ticket = authorityGeneration;
@@ -519,6 +542,27 @@ function bootstrap() {
       if (!selected()) return;
       if (error instanceof ApiError && error.status === 401) { disconnect(); message('Your session ended. Sign in again.', 'error'); return; }
       $('intent-authority').textContent = 'Partner approval readback is unavailable.';
+    }
+  }
+  async function showProfile(row) {
+    const current=generation,ticket=authorityGeneration;
+    const org=$('organizations').value,app=$('applications').value;
+    const selected=() => current===generation && ticket===authorityGeneration && org===$('organizations').value &&
+      app===$('applications').value && row.id===$('intent-target').value;
+    $('intent-profile').textContent='Checking reviewed setup…';
+    try {
+      const data=profileView(await client.request(`${appPath()}/intents/${row.id}/profile`),org,app,row.id,row.intent_sha256);
+      if (!selected()) return;
+      const labels={UNCONFIGURED:'Setup review is pending',DISABLED:'Reviewed setup was withdrawn',NOT_YET_VALID:'Review is not yet active',
+        EXPIRED:'Setup review expired',PROFILE_MISMATCH:'Requested setup differs from the review',ARTIFACT_UNADMITTED:'Application version is no longer admitted',
+        BUDGET_EXCEEDED:'Requested capacity exceeds the reviewed limit',NO_ELIGIBLE_NODE:'Reviewed server evidence is unavailable',
+        PLACEMENT_MISMATCH:'The application uses a server outside this review',MATCHED:'Requested setup matched its review at this check'};
+      $('intent-profile').textContent=`Latest setup check: ${date(data.observed_at)} · ${labels[data.state]}.` +
+        (data.state==='MATCHED' ? ` Review valid until ${date(data.valid_until)}. Recheck the request to record a new observation.` : '');
+    } catch (error) {
+      if (!selected()) return;
+      if (error instanceof ApiError && error.status===401) { disconnect();message('Your session ended. Sign in again.','error');return; }
+      $('intent-profile').textContent='Reviewed setup readback is unavailable.';
     }
   }
   async function loadDetails() {

@@ -45,7 +45,10 @@ approval adapter](docs/PARTNER_AUTHORITY.md) now accepts immutable, expiring and
 revocable exact-intent decisions from a tenant-registered machine publisher,
 checking current plan and administrator membership. Its upstream factory and
 live canonical records remain uninstalled. Automatic multi-resource provisioning,
-profile/secret/backup qualification and production acceptance remain open.
+[Reviewed execution profiles](docs/EXECUTION_PROFILES.md) now bind admitted
+artifacts, supported setup, resource ceilings and measured node configurations
+through immutable protected imports. Live profile review, secret/backup
+integration and production acceptance remain open.
 
 The [Zimbabwe launch and domain-registration recommendation](docs/ZIMBABWE_HOSTING_AND_DOMAINS.md)
 records `.co.zw` through a ZISPA member and `.com` through an OpenSRS reseller

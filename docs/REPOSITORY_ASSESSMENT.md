@@ -15,6 +15,23 @@ The Partner Platform document on main is preserved in this continuation and the
 README describes the executable foundation. The foundation must remain a draft
 until its remaining requirements and qualification gates are satisfied.
 
+## Reviewed execution profile continuation
+
+Migration 030 implements protected immutable imports for tenant/template/version/environment
+profiles, with admitted image digests, typed supported setup, bounded resource
+ceilings, independent review provenance and measured node configuration bindings.
+Current readback validates the newest version, expiry/withdrawal, fresh enabled
+node evidence, configuration/capacity/lifecycle drift and requested-artifact
+placement. API/portal/CLI readback excludes private review and estate details.
+Intent rechecks share one statement snapshot with earlier authority/runtime
+observations; matching a profile does not certify the estate or execute resources.
+[The runbook](EXECUTION_PROFILES.md) defines the protected attestation boundary.
+
+Live profile review and upstream factory installation, Partner secret resolution,
+independent backup integration and automatic intent execution remain open. All
+readiness and acceptance flags remain false. The API now has 39 paths and 52
+operations; the control schema has 30 migrations.
+
 ## Trusted Partner approval continuation
 
 Migration 029 adds a protected, immutable tenant publisher registry and exact-intent
@@ -28,7 +45,7 @@ mutated by this adapter. [The runbook](PARTNER_AUTHORITY.md) pins the inspected
 upstream canon and explains the trust boundary and uninstalled factory.
 
 No live publisher configuration, upstream commercial authority, template/estate
-qualification, Partner secret resolution, independent backup integration or
+review evidence, Partner secret resolution, independent backup integration or
 automatic intent execution is installed. All readiness and qualification flags
 remain false. The API now exposes 38 paths and 51 operations, with 29 migrations.
 
@@ -185,6 +202,14 @@ The existing 62 PostgreSQL tests and both Chromium browser proofs pass separatel
 OpenAPI advertises 38 paths / 51 operations; startup applies 29 migrations and
 refuses ledger drift. Exact-head CI evidence is recorded on draft PR #1; none of
 these disposable checks promotes production qualification.
+
+The reviewed profile continuation passes 102 fixture-free Python tests, with 105
+runtime checks skipped in that invocation (207 total), and 33 JavaScript tests.
+All 16 profile database checks pass, alongside the 77 prior PostgreSQL tests and
+both browser proofs. The API image packages all four contracts and 30 migrations;
+OpenAPI validates 39 paths / 52 operations. Pack, compilation and whitespace
+checks pass. Exact-head CI evidence is recorded on draft PR #1; disposable
+fixtures and protected import interfaces do not promote live qualification.
 
 ## Remaining deployment inputs
 

@@ -46,7 +46,11 @@ def evaluate(intent, digest, evidence):
     stage('commercial_authority','MATCHED' if approved else 'BLOCKED',
           'Registered Partner publisher asserts the exact intent and current hosting plan' if approved else
           'Current trusted Partner approval is unavailable: ' + authority.get('state','UNCONFIGURED'))
-    stage('profile_qualification','BLOCKED','Qualified template, runtime and estate profile registry is not installed')
+    profile = evidence.get('execution_profile') or {}
+    matched_profile = profile.get('state') == 'MATCHED'
+    stage('profile_qualification','MATCHED' if matched_profile else 'BLOCKED',
+          'Requested setup matches the current operator-reviewed template/runtime/estate profile and measured node bindings' if matched_profile else
+          'Current reviewed execution profile is unavailable: ' + profile.get('state','UNCONFIGURED'))
     stage('tenant_admin_bindings','MATCHED' if approved else 'BLOCKED',
           'Publisher-bound administrator references resolve to current tenant owners or admins' if approved else
           'Current trusted administrator bindings are unavailable')

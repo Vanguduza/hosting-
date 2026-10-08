@@ -120,3 +120,9 @@ The Hosting requests panel also shows a [current Partner approval check](PARTNER
 separate from immutable historical observations. Only a registered machine
 publisher can supply approval; there is no human approval upload form. Failed or
 malformed readback and selection changes clear the prior check.
+
+[Reviewed execution profile checks](EXECUTION_PROFILES.md) now appear in the same
+Hosting requests panel, bound to the selected intent hash. They show current
+setup compatibility separately from historical observations and Partner approval.
+Private reviewer evidence and estate details are withheld; profile imports use
+protected operator tools outside the portal.

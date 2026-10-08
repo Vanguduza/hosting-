@@ -357,6 +357,16 @@ def document():
             obj({'receipt': RECEIPT_SCHEMA},('receipt',)),
             description='Registered machine publisher only, with exact verified issuer, service audience, client and subject. Tenant source version, intent hash, monotonic sequence, expiry, current hosting plan and existing administrator bindings are checked. No resources, memberships or business records are changed.')}
     paths[intents + '/{intent_id}/authority']['post']['responses']['200'] = response(authority_ack,'Original immutable receipt replay; does not reactivate an approval')
+    from .execution_profiles import STATES as profile_states
+    profile_summary = obj({'organization_id':UUID,'application_id':UUID,'intent_id':UUID,
+        'intent_sha256':{'type':'string','pattern':'^[a-f0-9]{64}$'},'observed_at':DATE,
+        'state':{'enum':list(profile_states)},'profile_version_id':nullable_uuid,
+        'profile_sha256':{'oneOf':[{'type':'string','pattern':'^[a-f0-9]{64}$'},{'type':'null'}]},
+        'valid_from':nullable_date,'valid_until':nullable_date},
+        ('organization_id','application_id','intent_id','intent_sha256','observed_at','state',
+         'profile_version_id','profile_sha256','valid_from','valid_until'))
+    paths[intents + '/{intent_id}/profile'] = {'get':operation('readExecutionProfile','Read current reviewed setup compatibility',200,profile_summary,
+        description='Human owners and administrators only. Checks the latest protected profile version, exact desired setup, admitted digest, bounded budget and fresh measured node bindings. Private qualification evidence and estate details are excluded. A match does not certify the estate or authorize resource execution.')}
     replay = response(obj({"id": UUID, "state": STRING, "replayed": {"const": True}},
                           ("id", "state", "replayed")), "Matching idempotent replay")
     registrations = org + "/domain-registrations"

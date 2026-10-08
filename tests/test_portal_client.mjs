@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {ControlClient, MutationKeys, ApiError, canManage, canManageAccess, AuditPages,
-  invitationState, visibleReceipt, registrationQuote, entitlementView, intentObservation, authorityView} from '../services/api/hosting_api/portal/portal.mjs';
+  invitationState, visibleReceipt, registrationQuote, entitlementView, intentObservation, authorityView, profileView} from '../services/api/hosting_api/portal/portal.mjs';
 
 const json = (body, status = 200) => new Response(JSON.stringify(body), {
   status, headers: {'Content-Type': 'application/json'},
@@ -305,4 +305,20 @@ test('approval readback binds the selection and preserves bigint sequences', () 
   const absent={...data,state:'UNCONFIGURED',source_version_id:null,receipt_id:null,sequence:null,
     issued_at:null,valid_until:null,hosting_entitlement_version_id:null};
   assert.equal(authorityView(absent,org,app,intent).state,'UNCONFIGURED');
+});
+
+test('reviewed setup readback is exact-intent bound and fails closed on borrowed or stale matches', () => {
+  const org='11111111-1111-4111-8111-111111111111',app='22222222-2222-4222-8222-222222222222',intent='33333333-3333-4333-8333-333333333333';
+  const data={organization_id:org,application_id:app,intent_id:intent,intent_sha256:'a'.repeat(64),
+    observed_at:'2026-10-08T00:00:00Z',state:'MATCHED',profile_version_id:org,profile_sha256:'b'.repeat(64),
+    valid_from:'2026-10-07T00:00:00Z',valid_until:'2026-10-09T00:00:00Z'};
+  assert.equal(profileView(data,org,app,intent,'a'.repeat(64)),data);
+  for (const patch of [{organization_id:app},{application_id:org},{intent_id:app},{intent_sha256:'c'.repeat(64)},
+    {state:'QUALIFIED'},{profile_version_id:null},{profile_sha256:null},{valid_from:'2026-10-09T00:00:00Z'},
+    {valid_until:data.observed_at},{observed_at:'invalid'},{qualification_refs:{estate:'private-proof'}},{node_bindings:[]}]) {
+    assert.throws(() => profileView({...data,...patch},org,app,intent,'a'.repeat(64)));
+  }
+  const absent={...data,state:'UNCONFIGURED',profile_version_id:null,profile_sha256:null,valid_from:null,valid_until:null};
+  assert.equal(profileView(absent,org,app,intent,'a'.repeat(64)).state,'UNCONFIGURED');
+  assert.throws(() => profileView({...absent,profile_version_id:org},org,app,intent,'a'.repeat(64)));
 });
